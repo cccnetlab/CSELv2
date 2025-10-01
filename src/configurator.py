@@ -84,7 +84,7 @@ vulnerability_template = {
         "Checks": "User Name:Str,Group Name:Str",
         "Category": "Account Management",
     },
-    # impliment this one
+    # implement this one
     # "Secure Sudoers": {"Definition": 'Words to be removed from /etc/sudoers file',
     #                   "Checks": 'Banned Sudoers:Str',
     #                   "Category": 'Account Management'},
@@ -191,10 +191,10 @@ vulnerability_template = {
         "Category": "Program Management",
     },
     "Update Check Period": {
-        "Definition": "What has the update check period been set to? (apt/apt.conf.d/10periodic) \nPlease set Occurance as [minute] [hour] [day of month] [month] [day of week]",
+        "Definition": "What has the update check period been set to? (apt/apt.conf.d/10periodic) \nPlease set Occurrence as [minute] [hour] [day of month] [month] [day of week]",
         "Category": "Program Management",
     },
-    # "Update Auto Install": {"Definition": 'Automaticaly download and install security updates',
+    # "Update Auto Install": {"Definition": 'Automatically download and install security updates',
     #                       "Category": 'Program Management'},
     "Forensic": {
         "Definition": "Enable this to score the competitor for answering forensic a question.",
@@ -282,7 +282,7 @@ class VerticalScrolledFrame(Frame):
         # also updating the scrollbar
 
         def _configure_interior(event):
-            # update the scrollbars to match the size of the inner frame
+            # update the scrollbar to match the size of the inner frame
             size = (interior.winfo_reqwidth(), interior.winfo_reqheight())
             canvas.config(scrollregion="0 0 %s %s" % size)
             if interior.winfo_reqwidth() != canvas.winfo_width():
@@ -308,13 +308,13 @@ class Config(Tk):
     def __init__(self, *args, **kwargs):
         Tk.__init__(self, *args, **kwargs)
 
-        # elevated privalege is needed to run our commands, it asks on boot
+        # elevated privilege is needed to run our commands, it asks on boot
         # fix Check- idk if this works but I think it should
         # turn off before PUSH
         if not "SUDO_UID" in os.environ.keys():
             switch = messagebox.askyesno(
                 "Root Access Required",
-                "You need to be Admin to Write to Config. Please relaunch the confiturator as Administrator.",
+                "You need to be Admin to Write to Config. Please relaunch the configurator as Administrator.",
             )
             if switch:
                 sys.exit(1)
