@@ -14,15 +14,15 @@ checkPointUpdates(){ #look for point changes and post a notification when there 
 	pointUpdate=$(cat /etc/CYBERPATRIOT_DO_NOT_REMOVE/score)
 	if [ "$pointUpdate" == "" ] ; then
 		pointUpdate=0
-		echo $imageScore > /etc/CYBERPATRIOT_DO_NOT_REMOVE/score
+		echo "$imageScore" > /etc/CYBERPATRIOT_DO_NOT_REMOVE/score
 	fi
-	if [ $imageScore \> $pointUpdate ] ; then
+	if [ "$imageScore" \> "$pointUpdate" ] ; then
 		notify-send "You Got Points!!"
-		echo $imageScore > /etc/CYBERPATRIOT_DO_NOT_REMOVE/score
+		echo "$imageScore" > /etc/CYBERPATRIOT_DO_NOT_REMOVE/score
 	fi
-	if [ $imageScore \< $pointUpdate ] ; then
+	if [ "$imageScore" \< "$pointUpdate" ] ; then
 		notify-send "You Lost Points!!"
-		echo $imageScore > /etc/CYBERPATRIOT_DO_NOT_REMOVE/score
+		echo "$imageScore" > /etc/CYBERPATRIOT_DO_NOT_REMOVE/score
 	fi
 }
 
@@ -45,67 +45,67 @@ askForUniqueID(){ #Ask for the competitors unique id
 		fi
 	fi
 	if [ -z "$FTPServer" ]; then :; else
-		nameR=`cat /usr/local/bin/name`
-		sed -i "s/#NAME#/"$nameR"/g" /usr/local/bin/csel_SCORING_REPORT_FTP_DO_NO_TOUCH
-		cat /usr/local/bin/uniqueId > $indexR/$nameR
+		nameR=$(cat /usr/local/bin/name)
+		sed -i "s/#NAME#/""$nameR""/g" /usr/local/bin/csel_SCORING_REPORT_FTP_DO_NO_TOUCH
+		cat /usr/local/bin/uniqueId > "$indexR"/"$nameR"
 	fi
 }
 
 recordHit(){ #Use: recordHit <Issue you want highlighted> <Number of points to add>
-	echo '<p style="color:green">' $1  '('$2' points)</p>' >> $index
-	addScore $2
+	echo '<p style="color:green">' "$1"  '('"$2"' points)</p>' >> "$index"
+	addScore "$2"
 	if [ -z "$FTPServer" ]; then :; else
-		echo $3','$1','$2 >> $indexR/$nameR
+		echo "$3"','"$1"','"$2" >> "$indexR"/"$nameR"
 	fi
 }
 
 recordMiss(){ #Use: recordMiss <Issue you want highlighted>
 	if [ -z "$silentMiss" ]; then 
-		echo '<p style="color:red">MISS '$1' Issue</p>' >> $index
+		echo '<p style="color:red">MISS '"$1"' Issue</p>' >> "$index"
 	fi
 }
 
 recordPenalty(){ #Use: recordPenalty <Issue> <a negative number>
-	echo '<p style="color:red">'$1' ('$2' points)</p>' >> $index
-	addScore $2
+	echo '<p style="color:red">'"$1"' ('"$2"' points)</p>' >> "$index"
+	addScore "$2"
 	if [ -z "$FTPServer" ]; then :; else
-		echo $3','$1','$2 >> $indexR/$nameR
+		echo "$3"','"$1"','"$2" >> "$indexR"/"$nameR"
 	fi
 }
 
 drawHead(){ #Create the Score Report html 
-	rm $indexD/ScoreReport.html
-	echo '<!doctype html><html><head><title>CSEL Score Report</title><meta http-equiv="refresh" content="30"></head><body style="background-color:powderblue;">' > $index
-	echo '<table align="center" cellpadding="10"><tr><td><img src="/etc/CYBERPATRIOT_DO_NOT_REMOVE/iguana.png"></td><td><img src="/etc/CYBERPATRIOT_DO_NOT_REMOVE/logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v2.0</H2></div></td><td><img src="/etc/CYBERPATRIOT_DO_NOT_REMOVE/SoCalCCCC.png"></td><td><img src="/etc/CYBERPATRIOT_DO_NOT_REMOVE/CCC_logo.png"></td></tr></table><br><H2>Your Score: #TotalScore#/#PossiblePoints#</H2><H2>Vulnerabilities: #TotalVuln#/#PossibleVuln#</H2><hr>' >> $index
+	rm "$indexD"/ScoreReport.html
+	echo '<!doctype html><html><head><title>CSEL Score Report</title><meta http-equiv="refresh" content="30"></head><body style="background-color:powderblue;">' > "$index"
+	echo '<table align="center" cellpadding="10"><tr><td><img src="/etc/CYBERPATRIOT_DO_NOT_REMOVE/iguana.png"></td><td><img src="/etc/CYBERPATRIOT_DO_NOT_REMOVE/logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v2.0</H2></div></td><td><img src="/etc/CYBERPATRIOT_DO_NOT_REMOVE/SoCalCCCC.png"></td><td><img src="/etc/CYBERPATRIOT_DO_NOT_REMOVE/CCC_logo.png"></td></tr></table><br><H2>Your Score: #TotalScore#/#PossiblePoints#</H2><H2>Vulnerabilities: #TotalVuln#/#PossibleVuln#</H2><hr>' >> "$index"
 	if [ -z "$FTPServer" ]; then :; else
-		echo 'Score,#TotalScore#/#PossiblePoints#,' >> $indexR/$nameR
-		echo 'Vulnerabilities,#TotalVuln#/#PossibleVuln#,' >> $indexR/$nameR
-		echo 'Name,Description,Points' >> $indexR/$nameR
+		echo 'Score,#TotalScore#/#PossiblePoints#,' >> "$indexR"/"$nameR"
+		echo 'Vulnerabilities,#TotalVuln#/#PossibleVuln#,' >> "$indexR"/"$nameR"
+		echo 'Name,Description,Points' >> "$indexR"/"$nameR"
 	fi
 }
 
 drawTail(){ #Finish up report (insert score, possible points, vulnerability count and possible vulnerability count)
-	sed -i "s/#TotalScore#/"$imageScore"/g" $index
-	sed -i "s/#PossiblePoints#/"$posPoints"/g" $index
-	sed -i "s/#TotalVuln#/"$imageVuln"/g" $index
-	sed -i "s/#PossibleVuln#/"$posVuln"/g" $index
-	echo '<hr><div align="center"><br>Developed by Josh Davis<br><b>Eastern Oklahoma County Technology Center/Coastline Collage</b><br>Feedback welcome: <a href="mailto:jdavis@eoctech.edu?Subject=CSEL" target="_top">jdavis@eoctech.edu</a><br>Modified/Updated by Shaun Martin</br><b>Coastline Collage</b><br>Feedback welcome: <a href="mailto:smartin94@student.cccd.edu?Subject=CSEL Scoring Engine" target="_top">smartin94@student.cccd.edu</a></div>' >> $index
-	cd $indexD
+	sed -i "s/#TotalScore#/""$imageScore""/g" "$index"
+	sed -i "s/#PossiblePoints#/""$posPoints""/g" "$index"
+	sed -i "s/#TotalVuln#/""$imageVuln""/g" "$index"
+	sed -i "s/#PossibleVuln#/""$posVuln""/g" "$index"
+	echo '<hr><div align="center"><br>Developed by Josh Davis<br><b>Eastern Oklahoma County Technology Center/Coastline Collage</b><br>Feedback welcome: <a href="mailto:jdavis@eoctech.edu?Subject=CSEL" target="_top">jdavis@eoctech.edu</a><br>Modified/Updated by Shaun Martin</br><b>Coastline Collage</b><br>Feedback welcome: <a href="mailto:smartin94@student.cccd.edu?Subject=CSEL Scoring Engine" target="_top">smartin94@student.cccd.edu</a></div>' >> "$index"
+	cd $indexD || exit
 	ln /usr/local/bin/ScoreReport.html
 	if [ -z "$FTPServer" ]; then :; else
-		sed -i "s/#TotalScore#/"$imageScore"/g" $indexR/$nameR
-		sed -i "s/#PossiblePoints#/"$posPoints"/g" $indexR/$nameR
-		sed -i "s/#TotalVuln#/"$imageVuln"/g" $indexR/$nameR
-		sed -i "s/#PossibleVuln#/"$posVuln"/g" $indexR/$nameR
+		sed -i "s/#TotalScore#/""$imageScore""/g" "$indexR"/"$nameR"
+		sed -i "s/#PossiblePoints#/""$posPoints""/g" "$indexR"/"$nameR"
+		sed -i "s/#TotalVuln#/""$imageVuln""/g" "$indexR"/"$nameR"
+		sed -i "s/#PossibleVuln#/""$posVuln""/g" "$indexR"/"$nameR"
 	fi
 }
 
 #Frame1
 checkForensicsQuestion1(){ #Check for the correct answer in the forensics question
-	if [ -z "$forensicsAnswer1" ]; then :; else addPosPoints $checkForensicsQuestion1Value
+	if [ -z "$forensicsAnswer1" ]; then :; else addPosPoints "$checkForensicsQuestion1Value"
 		echo 'FA1'
-		if grep -q  "ANSWER: $forensicsAnswer1" $forensicsPath1 ; then
-			recordHit 'Forensics Question 1 correct. '$forensicsAnswer1 $checkForensicsQuestion1Value 'Forensics Question 1'
+		if grep -q  "ANSWER: $forensicsAnswer1" "$forensicsPath1" ; then
+			recordHit 'Forensics Question 1 correct. '"$forensicsAnswer1" "$checkForensicsQuestion1Value" 'Forensics Question 1'
 		else
 			recordMiss 'Forensics Question'
 		fi
@@ -113,10 +113,10 @@ checkForensicsQuestion1(){ #Check for the correct answer in the forensics questi
 }
 
 checkForensicsQuestion2(){ #Check for the correct answer in the forensics question
-	if [ -z "$forensicsAnswer2" ]; then :; else addPosPoints $checkForensicsQuestion2Value
+	if [ -z "$forensicsAnswer2" ]; then :; else addPosPoints "$checkForensicsQuestion2Value"
 		echo 'FA2'
-		if grep -q  "ANSWER: $forensicsAnswer2" $forensicsPath2 ; then
-			recordHit 'Forensics Question 2 correct. '$forensicsAnswer2 $checkForensicsQuestion2Value 'Forensics Question 1'
+		if grep -q  "ANSWER: $forensicsAnswer2" "$forensicsPath2" ; then
+			recordHit 'Forensics Question 2 correct. '"$forensicsAnswer2" "$checkForensicsQuestion2Value" 'Forensics Question 1'
 		else
 			recordMiss 'Forensics Question'
 		fi
@@ -126,16 +126,16 @@ checkForensicsQuestion2(){ #Check for the correct answer in the forensics questi
 #Frame2
 disableGuest(){ #Check /etc/lightdm/lightdm.conf is the Guest account disabled?
 	echo 'DG'
-	if [ -z "$disableGuest" ]; then :; else addPosPoints $disableGuestValue
+	if [ -z "$disableGuest" ]; then :; else addPosPoints "$disableGuestValue"
 		if [ -f "/etc/lightdm/lightdm.conf.d/50-ubuntu.conf" ]; then
 			if [[ $(cat /etc/lightdm/lightdm.conf.d/50-ubuntu.conf | grep allow-guest=false) ]] ; then
-				recordHit 'Guest account disabled in /etc/lightdm/lightdm.conf.d/50-ubuntu.conf.' $disableGuestValue 'Disable Guest Account'
+				recordHit 'Guest account disabled in /etc/lightdm/lightdm.conf.d/50-ubuntu.conf.' "$disableGuestValue" 'Disable Guest Account'
 			else
 				recordMiss 'Guest account'
 			fi
 		elif [ -f "/etc/lightdm/lightdm.conf" ]; then
 			if [[ $(cat /etc/lightdm/lightdm.conf | grep allow-guest=false) ]] ; then
-				recordHit 'Guest account disabled in /etc/lightdm/lightdm.conf.' $disableGuestValue 'Disable Guest Account'
+				recordHit 'Guest account disabled in /etc/lightdm/lightdm.conf.' "$disableGuestValue" 'Disable Guest Account'
 			else
 				recordMiss 'Guest account'
 			fi
@@ -145,20 +145,20 @@ disableGuest(){ #Check /etc/lightdm/lightdm.conf is the Guest account disabled?
 
 disableAutoLogin(){ #Check /etc/lightdm/lightdm.conf for an auto login account?
 	echo 'DAL'
-	if [ -z "$disableAutoLogin" ]; then :; else addPosPoints $disableAutoLoginValue
+	if [ -z "$disableAutoLogin" ]; then :; else addPosPoints "$disableAutoLoginValue"
 		if [[ $(cat /etc/lightdm/lightdm.conf | grep ^autologin-user) ]] ; then
 			recordMiss 'Auto login'
 		else
-			recordHit 'Autologin disabled in /etc/lightdm/lightdm.conf.' $disableAutoLoginValue 'Disable Auto Login'
+			recordHit 'Autologin disabled in /etc/lightdm/lightdm.conf.' "$disableAutoLoginValue" 'Disable Auto Login'
 		fi
 	fi
 }
 
 disableUserGreeter(){
 	echo 'DUG'
-	if [ -z "$disableUserGreeter" ]; then :; else addPosPoints $disableUserGreeterValue
+	if [ -z "$disableUserGreeter" ]; then :; else addPosPoints "$disableUserGreeterValue"
 		if [[ $(cat /etc/lightdm/lightdm.conf | grep greeter-hide-users=true) ]] ; then
-			recordHit 'Show usernames on login greeter is disabled in /etc/lightdm/lightdm.conf.' $disableUserGreeterValue 'Disable User Greeter'
+			recordHit 'Show usernames on login greeter is disabled in /etc/lightdm/lightdm.conf.' "$disableUserGreeterValue" 'Disable User Greeter'
 		else
 			recordMiss 'Greeter'
 		fi
@@ -167,13 +167,13 @@ disableUserGreeter(){
 
 dissableSshRootLogin(){ #Checks the sshd_config for enablerootlogin no
 	echo 'DSRL'
-	if [ -z "$disableSshRootLogin" ]; then :; else addPosPoints $disableSshRootLoginValue
+	if [ -z "$disableSshRootLogin" ]; then :; else addPosPoints "$disableSshRootLoginValue"
 		if [ ! -d "/etc/ssh/sshd_config" ] ; then
 			apt-get update
 			apt-get install ssh -y
 		fi
 		if [[ $(cat /etc/ssh/sshd_config | grep "PermitRootLogin no") ]] ; then
-			recordHit 'SSH root login disabled in /etc/ssh/sshd_config.' $disableSshRootLoginValue 'Dissable SSH Root Login'
+			recordHit 'SSH root login disabled in /etc/ssh/sshd_config.' "$disableSshRootLoginValue" 'Dissable SSH Root Login'
 		else
 			recordMiss 'SSH Root Login'
 		fi
@@ -182,9 +182,9 @@ dissableSshRootLogin(){ #Checks the sshd_config for enablerootlogin no
 
 checkFirewall(){ #Is ufw installed and enabled?
 	echo 'CF'
-	if [ -z "$checkFirewall" ]; then :; else addPosPoints $checkFirewallValue
+	if [ -z "$checkFirewall" ]; then :; else addPosPoints "$checkFirewallValue"
 		if sudo ufw status | grep "Status: active" > /dev/null ; then
-			recordHit 'UFW firewall enabled.' $checkFirewallValue 'Check Firewall'
+			recordHit 'UFW firewall enabled.' "$checkFirewallValue" 'Check Firewall'
 		else
 			recordMiss 'Firewall'
 		fi
@@ -193,11 +193,11 @@ checkFirewall(){ #Is ufw installed and enabled?
 
 checkKernel(){
 	echo 'CK'
-	if [ -z "$checkKernel" ]; then :; else addPosPoints $checkKernelValue
+	if [ -z "$checkKernel" ]; then :; else addPosPoints "$checkKernelValue"
 		currentKernel=$(uname -r | awk -F. '{printf($1 "%02d\n", $2) }')
-		initialKernelFormatted=$(echo $initialKernel | awk -F. '{printf($1 "%02d\n", $2) }')
+		initialKernelFormatted=$(echo "$initialKernel" | awk -F. '{printf($1 "%02d\n", $2) }')
 		if (( "$currentKernel" > "$initialKernelFormatted" )) ; then 
-			recordHit 'Kernel Updated to '$currentKernel'.' $checkKernelValue 'Check Kernal'
+			recordHit 'Kernel Updated to '"$currentKernel"'.' "$checkKernelValue" 'Check Kernal'
 		else
 			recordMiss 'Kernel'
 		fi
@@ -206,12 +206,12 @@ checkKernel(){
 
 avUpdated(){ #Check to see that clamav has been updated
 	echo 'AU'
-	if [ -z "$avUpdated" ]; then :; else addPosPoints $avUpdatedValue
+	if [ -z "$avUpdated" ]; then :; else addPosPoints "$avUpdatedValue"
 		if [ -e /var/log/clamav/freshclam.log ] ; then
 			avUpdateDate=$(date -d $(grep 'main.cvd is up' /var/log/clamav/freshclam.log | awk '{print $2"-"$3"-"$5}' | tail -1) +%s)
 			installDate=$(($installDate - 86400))
 		if (( "$avUpdateDate" >= "$installDate" )) ; then
-			recordHit 'AntiVirus has been updated to '$avUpdateDate'.' $avUpdatedValue 'AntiVirus Updave'
+			recordHit 'AntiVirus has been updated to '"$avUpdateDate"'.' "$avUpdatedValue" 'AntiVirus Updave'
 		else
 			recordMiss 'AntiVirus'
 		fi
@@ -223,22 +223,22 @@ fi
 
 minPassAge(){ #Check minimum password age
 	echo 'MinPA'
-	if [ -z "$minPassAge" ]; then :; else addPosPoints $minPassAgeValue
+	if [ -z "$minPassAge" ]; then :; else addPosPoints "$minPassAgeValue"
 		currentMin=$(cat /etc/login.defs | grep ^PASS_MIN_DAYS | awk '{print $2;}') #find current minimum
 		if (( "$currentMin" < "30" )) ; then
 			recordMiss 'Password Policy'
 		else
-			recordHit 'Minimum password age is set to '$currentMin' in /etc/login.defs.' $minPassAgeValue 'Minimum Password Age'
+			recordHit 'Minimum password age is set to '"$currentMin"' in /etc/login.defs.' "$minPassAgeValue" 'Minimum Password Age'
 		fi
 	fi
 }
 
 maxPassAge(){ #Check maximum password age
 	echo 'MaxPA'
-	if [ -z "$maxPassAge" ]; then :; else addPosPoints $maxPassAgeValue
+	if [ -z "$maxPassAge" ]; then :; else addPosPoints "$maxPassAgeValue"
 		currentMax=$(cat /etc/login.defs | grep ^PASS_MAX_DAYS | awk '{print $2;}') #Look in login.defs
 		if (( "$currentMax" <= "60" )) ; then
-			recordHit 'Maximum password age is set to '$currentMax' in /etc/login.defs.' $maxPassAgeValue 'Maximum Password Age'
+			recordHit 'Maximum password age is set to '"$currentMax"' in /etc/login.defs.' "$maxPassAgeValue" 'Maximum Password Age'
 		else
 			recordMiss 'Password Policy'
 		fi
@@ -247,10 +247,10 @@ maxPassAge(){ #Check maximum password age
 
 maxLoginTries(){ #Check max login threshold
 	echo 'MLT'
-	if [ -z "$maxLoginTries" ]; then :; else addPosPoints $maxLoginTriesValue
+	if [ -z "$maxLoginTries" ]; then :; else addPosPoints "$maxLoginTriesValue"
 		currentMax=$(cat /etc/login.defs | grep ^LOGIN_RETRIES | awk '{print $2;}') #Look at login.defs
 		if (( "$currentMax" <= "5" )) ; then
-			recordHit 'Maximum Login Tries is set to '$currentMin' in /etc/login.defs.' $maxLoginTriesValue 'Maximum Login Tries'
+			recordHit 'Maximum Login Tries is set to '"$currentMin"' in /etc/login.defs.' "$maxLoginTriesValue" 'Maximum Login Tries'
 		else
 			recordMiss 'Password Policy'
 		fi
@@ -259,15 +259,15 @@ maxLoginTries(){ #Check max login threshold
 
 checkPassLength(){ #Check /etc/pam.d/common-password for min length
 	echo 'CPL'
-	if [ -z "$checkPassLength" ]; then :; else addPosPoints $checkPassLengthValue
-		if [[ `grep minlen /etc/pam.d/common-password` ]] ; then #does remember exist in the file?
-			if [ `grep -o -P '(?<=minlen=).*(?=\ )' /etc/pam.d/common-password` ] ; then #Check for value somewhere in the middle of the line
+	if [ -z "$checkPassLength" ]; then :; else addPosPoints "$checkPassLengthValue"
+		if [[ $(grep minlen /etc/pam.d/common-password) ]] ; then #does remember exist in the file?
+			if [ $(grep -o -P '(?<=minlen=).*(?=\ )' /etc/pam.d/common-password) ] ; then #Check for value somewhere in the middle of the line
 				currentPassLength=$(grep -oP '(?<=minlen=).*(?=\ )' /etc/pam.d/common-password )
 			else #If it's not in the middle, it must be at the end of the line
 				currentPassLength=$(grep -oPz '(?<=minlen=)(.*\n)' /etc/pam.d/common-password )
 			fi
 			if (( "$currentPassLength" >= "10" )) ; then #Compare the current setting with the desired setting
-				recordHit 'Password Length is set to '$currentMin' in /etc/pam.d/common-password.'  $checkPassLengthValue 'Password Length'
+				recordHit 'Password Length is set to '"$currentMin"' in /etc/pam.d/common-password.'  "$checkPassLengthValue" 'Password Length'
 			else
 				recordMiss 'Password Policy'
 			fi
@@ -279,15 +279,15 @@ checkPassLength(){ #Check /etc/pam.d/common-password for min length
 
 checkPassHist(){ #Check /etc/pam.d/common-password for password history
 	echo 'CPH'
-	if [ -z "$checkPassHist" ]; then :; else addPosPoints $checkPassHistValue
-		if [[ `grep remember /etc/pam.d/common-password` ]] ; then #does remember exist in the file?
-			if [ `grep -o -P '(?<=remember=).*(?=\ )' /etc/pam.d/common-password` ] ; then #Check for value somewhere in the middle of the line
+	if [ -z "$checkPassHist" ]; then :; else addPosPoints "$checkPassHistValue"
+		if [[ $(grep remember /etc/pam.d/common-password) ]] ; then #does remember exist in the file?
+			if [ $(grep -o -P '(?<=remember=).*(?=\ )' /etc/pam.d/common-password) ] ; then #Check for value somewhere in the middle of the line
 				currentPassHist=$(grep -oP '(?<=remember=).*(?=\ )' /etc/pam.d/common-password )
 			else #If it's not in the middle, it must be at the end of the line
 				currentPassHist=$(grep -oPz '(?<=remember=)(.*\n)' /etc/pam.d/common-password )
 			fi
 			if (( "$currentPassHist" >= "5" )) ; then #Compare the current setting with the desired setting
-				recordHit 'Password History is set to '$currentPassHist' in /etc/pam.d/common-password.'  $checkPassHistValue 'Password History'
+				recordHit 'Password History is set to '"$currentPassHist"' in /etc/pam.d/common-password.'  "$checkPassHistValue" 'Password History'
 			else
 				recordMiss 'Password Policy'
 			fi
@@ -299,22 +299,22 @@ checkPassHist(){ #Check /etc/pam.d/common-password for password history
 
 checkPassCompx(){ #Check /etc/pam.d/common-password for password complexity
 	echo 'CPC'
-	if [ -z "$checkPassCompx" ]; then :; else addPosPoints $checkPassCompxValue
+	if [ -z "$checkPassCompx" ]; then :; else addPosPoints "$checkPassCompxValue"
 		if apt-cache policy "" | grep "Installed: (none)" > /dev/null ; then
 			recordMiss "Password Policy"
 		else
-			if [[ `grep ucredit=-1 /etc/pam.d/common-password` ]] ; then #does Ucredit exist in the file?
+			if [[ $(grep ucredit=-1 /etc/pam.d/common-password) ]] ; then #does Ucredit exist in the file?
 				currentPassHistU=-1
 			fi
-			if [[ `grep dcredit=-1 /etc/pam.d/common-password` ]] ; then #does Dcredit exist in the file?
+			if [[ $(grep dcredit=-1 /etc/pam.d/common-password) ]] ; then #does Dcredit exist in the file?
 				currentPassHistD=-1
 			fi
-			if [[ `grep ocredit=-1 /etc/pam.d/common-password` ]] ; then #does Ocredit exist in the file?
+			if [[ $(grep ocredit=-1 /etc/pam.d/common-password) ]] ; then #does Ocredit exist in the file?
 				currentPassHistO=-1
 			fi
 			currentPassCompx=$((currentPassHistU+currentPassHistD+currentPassHistO))
 			if (( "$currentPassCompx" == "-3" )) ; then #Compare the current setting with the desired setting
-				recordHit 'Password complexity has been set to ucredit=-1, dcredit=-1, ocredit=-1 in /etc/pam.d/common-password.'  $checkPassCompxValue 'Password complexity'
+				recordHit 'Password complexity has been set to ucredit=-1, dcredit=-1, ocredit=-1 in /etc/pam.d/common-password.'  "$checkPassCompxValue" 'Password complexity'
 			else
 				recordMiss 'Password Policy'
 			fi
@@ -324,9 +324,9 @@ checkPassCompx(){ #Check /etc/pam.d/common-password for password complexity
 
 updateCheckPeriod(){ #Check /etc/pam.d/common-password for password complexity
 	echo 'UCP'
-	if [ -z "$updateCheckPeriod" ]; then :; else addPosPoints $updateCheckPeriodValue
-		if [[ `grep -oP '(?<=Update-Package-Lists ").' /etc/apt/apt.conf.d/10periodic` -eq 1 ]] ; then
-			recordHit 'Update check period is set to 1 in /etc/apt/apt.conf.d/10periodic.' $updateCheckPeriodValue 'Update check period'
+	if [ -z "$updateCheckPeriod" ]; then :; else addPosPoints "$updateCheckPeriodValue"
+		if [[ $(grep -oP '(?<=Update-Package-Lists ").' /etc/apt/apt.conf.d/10periodic) -eq 1 ]] ; then
+			recordHit 'Update check period is set to 1 in /etc/apt/apt.conf.d/10periodic.' "$updateCheckPeriodValue" 'Update check period'
 		else
 			recordMiss 'Update'
 		fi
@@ -335,9 +335,9 @@ updateCheckPeriod(){ #Check /etc/pam.d/common-password for password complexity
 
 updateAutoInstall(){
 	echo 'UAI'
-	if [ -z "$updateAutoInstall" ]; then :; else addPosPoints $updateAutoInstallValue
-		if [[ `grep -oP '(?<=Unattended-Upgrade ").' /etc/apt/apt.conf.d/10periodic` -eq 1 ]] ; then
-			recordHit 'Updates set to 1 in /etc/apt/apt.conf.d/10periodic.' $updateAutoInstallValue 'Auto Install Updates'
+	if [ -z "$updateAutoInstall" ]; then :; else addPosPoints "$updateAutoInstallValue"
+		if [[ $(grep -oP '(?<=Unattended-Upgrade ").' /etc/apt/apt.conf.d/10periodic) -eq 1 ]] ; then
+			recordHit 'Updates set to 1 in /etc/apt/apt.conf.d/10periodic.' "$updateAutoInstallValue" 'Auto Install Updates'
 		else
 			recordMiss 'Updates'
 		fi
@@ -349,8 +349,8 @@ goodUser(){	#Penalize for deleting good users
 	if [ -z "$goodUser" ]; then :; else 
 		p=0
 		for i in "${goodUserKeywords[@]}" ; do
-			if getent passwd $i > /dev/null 2>&1; then :; else #If goodUser exists, do nothing, else penalize
-				recordPenalty "User "$i" deleted" ${goodUserValue[p]} 'Good User'
+			if getent passwd "$i" > /dev/null 2>&1; then :; else #If goodUser exists, do nothing, else penalize
+				recordPenalty "User ""$i"" deleted" "${goodUserValue[p]}" 'Good User'
 			fi
 			p=$((p+1))
 		done
@@ -359,13 +359,13 @@ goodUser(){	#Penalize for deleting good users
 
 badUser(){ #Check for bad users
 	echo 'BU'
-	if [ -z "$badUser" ]; then :; else for t in "${badUserValue[@]}"; do addPosPoints $t; done
+	if [ -z "$badUser" ]; then :; else for t in "${badUserValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${badUserKeywords[@]}" ; do
-			if getent passwd $i > /dev/null 2>&1; then
+			if getent passwd "$i" > /dev/null 2>&1; then
 				recordMiss 'User management'
 			else
-				recordHit 'User '$i' has been deleted.' ${badUserValue[p]} 'Bad User'
+				recordHit 'User '"$i"' has been deleted.' "${badUserValue[p]}" 'Bad User'
 			fi
 			p=$((p+1))
 		done
@@ -374,13 +374,13 @@ badUser(){ #Check for bad users
 
 goodProgram(){ #Check for good programs
 	echo 'GP'
-	if [ -z "$goodProgram" ]; then :; else for t in "${goodProgramValue[@]}"; do addPosPoints $t; done
+	if [ -z "$goodProgram" ]; then :; else for t in "${goodProgramValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${goodProgramKeywords[@]}" ; do
-			if apt-cache policy $i | grep "Installed: (none)" > /dev/null ; then
+			if apt-cache policy "$i" | grep "Installed: (none)" > /dev/null ; then
 				recordMiss 'Good program management'
 			else
-				recordHit 'Program '$i' installed.' ${goodProgramValue[p]} 'Good Program'
+				recordHit 'Program '"$i"' installed.' "${goodProgramValue[p]}" 'Good Program'
 			fi
 			p=$((p+1))
 		done
@@ -389,11 +389,11 @@ goodProgram(){ #Check for good programs
 
 badProgram(){ #Check for bad programs
 	echo 'BP'
-	if [ -z "$badProgram" ]; then :; else for t in "${badProgramValue[@]}"; do addPosPoints $t; done
+	if [ -z "$badProgram" ]; then :; else for t in "${badProgramValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${badProgramKeywords[@]}" ; do
-			if apt-cache policy $i | grep "Installed: (none)" > /dev/null ; then
-				recordHit 'Program '$i' uninstalled.' ${badProgramValue[p]} 'Bad Program'
+			if apt-cache policy "$i" | grep "Installed: (none)" > /dev/null ; then
+				recordHit 'Program '"$i"' uninstalled.' "${badProgramValue[p]}" 'Bad Program'
 			else
 				recordMiss 'Bad program management'
 			fi
@@ -404,13 +404,13 @@ badProgram(){ #Check for bad programs
 
 checkStartup() { #Check /etc/rc.local for certain words
 	echo 'CS'
-	if [ -z "$checkStartup" ]; then :; else for t in "${checkStartupValue[@]}"; do addPosPoints $t; done
+	if [ -z "$checkStartup" ]; then :; else for t in "${checkStartupValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${checkStartupKeywords[@]}" ; do
-			if [[ `grep $i /etc/rc.local` ]] ; then
+			if [[ $(grep "$i" /etc/rc.local) ]] ; then
 				recordMiss 'Startup'
 			else
-				recordHit $i' removed from /etc/rc.local.' ${checkStartupValue[p]} 'Check Startup'
+				recordHit "$i"' removed from /etc/rc.local.' "${checkStartupValue[p]}" 'Check Startup'
 			fi
 			p=$((p+1))
 		done
@@ -419,13 +419,13 @@ checkStartup() { #Check /etc/rc.local for certain words
 
 checkHosts(){ #Check for certain words in the hosts file
 	echo 'CH'
-	if [ -z "$checkHosts" ]; then :; else for t in "${checkHostsValue[@]}"; do addPosPoints $t; done
+	if [ -z "$checkHosts" ]; then :; else for t in "${checkHostsValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${checkHostsKeywords[@]}" ; do
-			if [[ `grep $checkHosts /etc/hosts` ]] ; then
+			if [[ $(grep "$checkHosts" /etc/hosts) ]] ; then
 				recordMiss 'Hosts file'
 			else
-				recordHit $i' removed from /etc/hosts.' ${checkHostsValue[p]} 'Check Host File'
+				recordHit "$i"' removed from /etc/hosts.' "${checkHostsValue[p]}" 'Check Host File'
 			fi
 			p=$((p+1))
 		done
@@ -434,13 +434,13 @@ checkHosts(){ #Check for certain words in the hosts file
 
 secureSudoers(){ #Check /etc/suders for specific text
 	echo 'SS'
-	if [ -z "$secureSudoers" ]; then :; else  for t in "${secureSudoersValue[@]}"; do addPosPoints $t; done
+	if [ -z "$secureSudoers" ]; then :; else  for t in "${secureSudoersValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${secureSudoersKeywords[@]}" ; do
-			if [[ $(sudo cat /etc/sudoers | grep $i) ]] ; then #If specific text exists in sudoers file
+			if [[ $(sudo cat /etc/sudoers | grep "$i") ]] ; then #If specific text exists in sudoers file
 				recordMiss 'Sudoers'
 			else
-				recordHit $i' has been removed from /etc/sudoers.' ${secureSudoersValue[p]} 'Check Sudoers File'
+				recordHit "$i"' has been removed from /etc/sudoers.' "${secureSudoersValue[p]}" 'Check Sudoers File'
 			fi
 			p=$((p+1))
 		done
@@ -449,13 +449,13 @@ secureSudoers(){ #Check /etc/suders for specific text
 
 badFile(){ #Check for bad files
 	echo 'BF'
-	if [ -z "$badFile" ]; then :; else for t in "${badFileValue[@]}"; do addPosPoints $t; done
+	if [ -z "$badFile" ]; then :; else for t in "${badFileValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${badFileKeywords[@]}" ; do 
 			if [ -e "$i" ] ; then
 				recordMiss 'File management '
 			else
-				recordHit 'File '$i' has been deleted.' ${badFileValue[p]} 'Bad File'
+				recordHit 'File '"$i"' has been deleted.' "${badFileValue[p]}" 'Bad File'
 			fi
 			p=$((p+1))
 		done
@@ -464,11 +464,11 @@ badFile(){ #Check for bad files
 
 goodAdmin(){ #Check certain users to see if they have been added to admin
 	echo 'GA'
-	if [ -z "$goodAdmin" ]; then :; else for t in "${goodAdminValue[@]}"; do addPosPoints $t; done
+	if [ -z "$goodAdmin" ]; then :; else for t in "${goodAdminValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${goodAdminKeywords[@]}" ; do
-			if [[ $(getent group sudo | grep $i) ]] ; then #If the user exists in admin group
-				recordHit $i' added to Admin group.' ${goodAdminValue[p]} 'Good Admin'
+			if [[ $(getent group sudo | grep "$i") ]] ; then #If the user exists in admin group
+				recordHit "$i"' added to Admin group.' "${goodAdminValue[p]}" 'Good Admin'
 			else
 				recordMiss 'Admin'
 			fi
@@ -479,13 +479,13 @@ goodAdmin(){ #Check certain users to see if they have been added to admin
 
 badAdmin(){ #Check certain users to see if they have been removed from admin
 	echo 'BA'
-	if [ -z "$badAdmin" ]; then :; else for t in "${badAdminValue[@]}"; do addPosPoints $t; done
+	if [ -z "$badAdmin" ]; then :; else for t in "${badAdminValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${badAdminKeywords[@]}" ; do
-			if [[ $(getent group sudo | grep $i) ]] ; then #If the user exists in admin group
+			if [[ $(getent group sudo | grep "$i") ]] ; then #If the user exists in admin group
 				recordMiss 'Admin'
 			else
-				recordHit $i' removed from Admin group.' ${badAdminValue[p]} 'Bad Admin'
+				recordHit "$i"' removed from Admin group.' "${badAdminValue[p]}" 'Bad Admin'
 			fi
 			p=$((p+1))
 		done
@@ -494,11 +494,11 @@ badAdmin(){ #Check certain users to see if they have been removed from admin
 
 newUser(){ #Check certain users to see if they have been added
 	echo 'NU'
-	if [ -z "$newUser" ]; then :; else for t in "${newUserValue[@]}"; do addPosPoints $t; done
+	if [ -z "$newUser" ]; then :; else for t in "${newUserValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${newUserKeywords[@]}" ; do
-			if getent passwd $i > /dev/null 2>&1; then
-				recordHit 'User '$i' has been created.' ${newUserValue[p]} 'New User'
+			if getent passwd "$i" > /dev/null 2>&1; then
+				recordHit 'User '"$i"' has been created.' "${newUserValue[p]}" 'New User'
 			else
 				recordMiss 'User management '
 			fi
@@ -509,11 +509,11 @@ newUser(){ #Check certain users to see if they have been added
 
 goodGroup(){ #Check certain groups to see if they excist
 	echo 'GG'
-	if [ -z "$goodGroup" ]; then :; else for t in "${goodGroupValue[@]}"; do addPosPoints $t; done
+	if [ -z "$goodGroup" ]; then :; else for t in "${goodGroupValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${goodGroupKeywords[@]}"; do
-			if grep  -q $i /etc/group; then
-				recordHit 'Group '$i' has been created.' ${goodGroupValue[p]} 'Good Group'
+			if grep  -q "$i" /etc/group; then
+				recordHit 'Group '"$i"' has been created.' "${goodGroupValue[p]}" 'Good Group'
 			else
 				recordMiss 'Group'
 			fi
@@ -524,13 +524,13 @@ goodGroup(){ #Check certain groups to see if they excist
 
 badGroup(){ #Check certain groups to see if they are removed
 	echo 'BG'
-	if [ -z "$badGroup" ]; then :; else for t in "${badGroupValue[@]}"; do addPosPoints $t; done
+	if [ -z "$badGroup" ]; then :; else for t in "${badGroupValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${badGroupKeywords[@]}"; do
-			if grep  -q $i /etc/group; then
+			if grep  -q "$i" /etc/group; then
 				recordMiss 'Group'
 			else
-				recordHit 'Group '$i' has been removed.' ${badGroupValue[p]} 'Bad Group'
+				recordHit 'Group '"$i"' has been removed.' "${badGroupValue[p]}" 'Bad Group'
 			fi
 			p=$((p+1))
 		done
@@ -539,11 +539,11 @@ badGroup(){ #Check certain groups to see if they are removed
 
 goodService() { #Check certain services to se if they are running
 	echo 'GS'
-	if [ -z "$goodService" ]; then :; else for t in "${goodServiceValue[@]}"; do addPosPoints $t; done
+	if [ -z "$goodService" ]; then :; else for t in "${goodServiceValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${goodServiceKeywords[@]}"; do
-			if sudo service $i status | grep 'Active: active (running)'; then
-				recordHit $i' service has been started.' ${goodServiceValue[p]} 'Good Service'
+			if sudo service "$i" status | grep 'Active: active (running)'; then
+				recordHit "$i"' service has been started.' "${goodServiceValue[p]}" 'Good Service'
 			else
 				recordMiss 'Service'
 			fi
@@ -554,13 +554,13 @@ goodService() { #Check certain services to se if they are running
 
 badService() { #Check certain services to se if they are not running
 	echo 'BS'
-	if [ -z "$badService" ]; then :; else for t in "${badServiceValue[@]}"; do addPosPoints $t; done
+	if [ -z "$badService" ]; then :; else for t in "${badServiceValue[@]}"; do addPosPoints "$t"; done
 		p=0
 		for i in "${badServiceKeywords[@]}"; do
-			if sudo service $i status | grep 'Active: active (running)'; then
+			if sudo service "$i" status | grep 'Active: active (running)'; then
 				recordMiss 'Service'
 			else
-				recordHit $i' service has been stopped.' ${badServiceValue[p]} 'Bad Service'
+				recordHit "$i"' service has been stopped.' "${badServiceValue[p]}" 'Bad Service'
 			fi
 			p=$((p+1))
 		done
@@ -569,14 +569,14 @@ badService() { #Check certain services to se if they are not running
 
 changePassword(){ #Check certain users for blank passwords
 	echo 'CP'
-	if [ -z "$changePassword" ]; then :; else for t in "${changePasswordValue[@]}"; do addPosPoints $t; done
+	if [ -z "$changePassword" ]; then :; else for t in "${changePasswordValue[@]}"; do addPosPoints "$t"; done
 		p=0
-		echo ${changePasswordExtraKeywords[$t]}
+		echo "${changePasswordExtraKeywords[$t]}"
 		for i in "${changePasswordKeywords[@]}" ; do #Check for blank passwords
-			if [[ $(getent shadow | grep $i\:${changePasswordExtraKeywords[$p]}\:) ]] ; then
+			if [[ $(getent shadow | grep "$i"\:"${changePasswordExtraKeywords[$p]}"\:) ]] ; then
 				recordMiss Password
 			else
-				recordHit 'User '$i' password has been changed.' ${changePasswordValue[p]} 'Change Password'
+				recordHit 'User '"$i"' password has been changed.' "${changePasswordValue[p]}" 'Change Password'
 			fi
 			t=$((p+1))
 		done
@@ -585,19 +585,19 @@ changePassword(){ #Check certain users for blank passwords
 
 #Frame4
 badCron(){ #Check that bad cronjobs are deleted or commented out.
-	if [ -z "$badCron" ]; then :; else for t in "${badCronValue[@]}"; do addPosPoints $t; echo 'BC'; done
+	if [ -z "$badCron" ]; then :; else for t in "${badCronValue[@]}"; do addPosPoints "$t"; echo 'BC'; done
 		p=0
 		for i in "${badCronKeywords[@]}" ; do
-			if [ -z /var/spool/cron/crontabs/$i ]; then #If user crontab has been deleted
-				recordHit 'Cron tab for '$i' has been deleted.' ${badCronValue[p]} 'Bad Cronjob'
+			if [ -z /var/spool/cron/crontabs/"$i" ]; then #If user crontab has been deleted
+				recordHit 'Cron tab for '"$i"' has been deleted.' "${badCronValue[p]}" 'Bad Cronjob'
 			else
-				if [[ $(crontab -u $i -l | grep ^# | grep ${badCronExtraKeywords[$t]}) ]]; then #If bad line has been commented out
-					recordHit 'Cron job '${badCronExtraKeywords[$t]}' in '$i' has been commented out.' ${badCronValue[p]} 'Bad Cronjob'
+				if [[ $(crontab -u "$i" -l | grep ^# | grep "${badCronExtraKeywords[$t]}") ]]; then #If bad line has been commented out
+					recordHit 'Cron job '"${badCronExtraKeywords[$t]}"' in '"$i"' has been commented out.' "${badCronValue[p]}" 'Bad Cronjob'
 				else
-					if [[ $(crontab -u $i -l | grep ${badCronExtraKeywords[$t]}) ]]; then #If bad line has been deleted
+					if [[ $(crontab -u "$i" -l | grep "${badCronExtraKeywords[$t]}") ]]; then #If bad line has been deleted
 						recordMiss 'Crontab'
 					else
-						recordHit 'Cron job '${badCronExtraKeywords[$t]}' in '$i' has been deleted.' ${badCronValue[p]} 'Bad Cronjob'
+						recordHit 'Cron job '"${badCronExtraKeywords[$t]}"' in '"$i"' has been deleted.' "${badCronValue[p]}" 'Bad Cronjob'
 					fi
 				fi
 			fi
@@ -607,12 +607,12 @@ badCron(){ #Check that bad cronjobs are deleted or commented out.
 }
 
 userInGroup(){ #Check certain users to see if they have been added to a certain group
-	if [ -z "$userInGroup" ]; then :; else for t in "${userInGroupValue[@]}"; do addPosPoints $t; echo 'UIG'; done
+	if [ -z "$userInGroup" ]; then :; else for t in "${userInGroupValue[@]}"; do addPosPoints "$t"; echo 'UIG'; done
 		p=0
 		for i in "${userInGroupKeywords[@]}"; do
-			x=$(eval getent group ${userInGroupExtraKeywords[$p]})
+			x=$(eval getent group "${userInGroupExtraKeywords[$p]}")
 			if [[ $x == *$i* ]]; then
-				recordHit $i' is in '${userInGroupExtraKeywords[$p]}'.' ${userInGroupValue[$p]} 'User In Group'
+				recordHit "$i"' is in '"${userInGroupExtraKeywords[$p]}"'.' "${userInGroupValue[$p]}" 'User In Group'
 			else
 				recordMiss 'User in Group'
 			fi
@@ -623,12 +623,12 @@ userInGroup(){ #Check certain users to see if they have been added to a certain 
 
 #Frame5
 fileContainsText1(){
-	if [ -z "$fileContainsText1" ]; then :; else for t in "${fileContainsText1Value[@]}"; do addPosPoints $t; done
-		if [ -e $fileContainsText1Location ]; then
-			if grep -q "$fileContainsText1Keywords" $fileContainsText1Location ; then
-				echo $fileContainsText1Location $fileContainsText1Keywords $fileContainsText1Value $fileContainsText1ExtraKeywords
-				if grep  ^[^#] $fileContainsText1Location | grep "$fileContainsText1Keywords" ; then
-					recordHit "$fileContainsText1ExtraKeywords" ${fileContainsText1Value[$p]} 'Custom File Search add 1'
+	if [ -z "$fileContainsText1" ]; then :; else for t in "${fileContainsText1Value[@]}"; do addPosPoints "$t"; done
+		if [ -e "$fileContainsText1Location" ]; then
+			if grep -q "$fileContainsText1Keywords" "$fileContainsText1Location" ; then
+				echo "$fileContainsText1Location" "$fileContainsText1Keywords" "$fileContainsText1Value" "$fileContainsText1ExtraKeywords"
+				if grep  ^[^#] "$fileContainsText1Location" | grep "$fileContainsText1Keywords" ; then
+					recordHit "$fileContainsText1ExtraKeywords" "${fileContainsText1Value[$p]}" 'Custom File Search add 1'
 				else
 					recordMiss 'File Configuration'
 				fi
@@ -642,12 +642,12 @@ fileContainsText1(){
 }
 
 fileContainsText2(){
-	if [ -z "$fileContainsText2" ]; then :; else for t in "${fileContainsText2Value[@]}"; do addPosPoints $t; done
-		if [ -e $fileContainsText2Location ]; then
-			if grep -q "$fileContainsText2Keywords" $fileContainsText2Location ; then
-				echo $fileContainsText2Location $fileContainsText2Keywords $fileContainsText2Value $fileContainsText2ExtraKeywords
-				if grep  ^[^#] $fileContainsText2Location | grep "$fileContainsText2Keywords" ; then
-					recordHit "$fileContainsText2ExtraKeywords" ${fileContainsText2Value[$p]} 'Custom File Search add 2'
+	if [ -z "$fileContainsText2" ]; then :; else for t in "${fileContainsText2Value[@]}"; do addPosPoints "$t"; done
+		if [ -e "$fileContainsText2Location" ]; then
+			if grep -q "$fileContainsText2Keywords" "$fileContainsText2Location" ; then
+				echo "$fileContainsText2Location" "$fileContainsText2Keywords" "$fileContainsText2Value" "$fileContainsText2ExtraKeywords"
+				if grep  ^[^#] "$fileContainsText2Location" | grep "$fileContainsText2Keywords" ; then
+					recordHit "$fileContainsText2ExtraKeywords" "${fileContainsText2Value[$p]}" 'Custom File Search add 2'
 				else
 					recordMiss 'File Configuration '
 				fi
@@ -661,49 +661,49 @@ fileContainsText2(){
 }
 
 fileNoLongerContains1(){
-	if [ -z "$fileNoLongerContains1" ]; then :; else for t in "${fileNoLongerContains1Value[@]}"; do addPosPoints $t; done
-		if [ -e $fileNoLongerContains1Location ]; then
-			if grep -q "$fileNoLongerContains1Keywords" $fileNoLongerContains1Location ; then
-				if grep -q ^[^#] $fileNoLongerContains1Location | grep "$fileNoLongerContains1Keywords" ; then
+	if [ -z "$fileNoLongerContains1" ]; then :; else for t in "${fileNoLongerContains1Value[@]}"; do addPosPoints "$t"; done
+		if [ -e "$fileNoLongerContains1Location" ]; then
+			if grep -q "$fileNoLongerContains1Keywords" "$fileNoLongerContains1Location" ; then
+				if grep -q ^[^#] "$fileNoLongerContains1Location" | grep "$fileNoLongerContains1Keywords" ; then
 					recordMiss 'File Configuration'
 				else
-					recordHit "$fileNoLongerContains1ExtraKeywords" ${fileNoLongerContains1Value[$p]} 'Custom File Search removal 1'
+					recordHit "$fileNoLongerContains1ExtraKeywords" "${fileNoLongerContains1Value[$p]}" 'Custom File Search removal 1'
 				fi
 			else
-				recordHit "$fileNoLongerContains1ExtraKeywords" ${fileNoLongerContains1Value[$p]} 'Custom File Search removal 1'
+				recordHit "$fileNoLongerContains1ExtraKeywords" "${fileNoLongerContains1Value[$p]}" 'Custom File Search removal 1'
 			fi
 		else
-			recordHit "$fileNoLongerContains1ExtraKeywords" ${fileNoLongerContains1Value[$p]} 'Custom File Search removal 1'
+			recordHit "$fileNoLongerContains1ExtraKeywords" "${fileNoLongerContains1Value[$p]}" 'Custom File Search removal 1'
 		fi
 	fi
 }
 
 fileNoLongerContains2(){
-	if [ -z "$fileNoLongerContains2" ]; then :; else for t in "${fileNoLongerContains2Value[@]}"; do addPosPoints $t; done
-		if [ -e $fileNoLongerContains2Location ]; then
-			if grep -q "$fileNoLongerContains2Keywords" $fileNoLongerContains2Location ; then
-				if grep -q ^[^#] $fileNoLongerContains2Location | grep "$fileNoLongerContains2Keywords" ; then
+	if [ -z "$fileNoLongerContains2" ]; then :; else for t in "${fileNoLongerContains2Value[@]}"; do addPosPoints "$t"; done
+		if [ -e "$fileNoLongerContains2Location" ]; then
+			if grep -q "$fileNoLongerContains2Keywords" "$fileNoLongerContains2Location" ; then
+				if grep -q ^[^#] "$fileNoLongerContains2Location" | grep "$fileNoLongerContains2Keywords" ; then
 					recordMiss 'File Configuration '
 				else
-					recordHit "$fileNoLongerContains2ExtraKeywords" ${fileNoLongerContains2Value[$p]} 'Custom File Search removal 2'
+					recordHit "$fileNoLongerContains2ExtraKeywords" "${fileNoLongerContains2Value[$p]}" 'Custom File Search removal 2'
 				fi
 			else
-				recordHit "$fileNoLongerContains2ExtraKeywords" ${fileNoLongerContains2Value[$p]} 'Custom File Search removal 2'
+				recordHit "$fileNoLongerContains2ExtraKeywords" "${fileNoLongerContains2Value[$p]}" 'Custom File Search removal 2'
 			fi
 		else
-			recordHit "$fileNoLongerContains2ExtraKeywords" ${fileNoLongerContains2Value[$p]} 'Custom File Search removal 2'
+			recordHit "$fileNoLongerContains2ExtraKeywords" "${fileNoLongerContains2Value[$p]}" 'Custom File Search removal 2'
 		fi
 	fi
 }
 
 #Not Implemented
 backdoor(){ #Look for process running with the name $backdoor
-	if [ -z "$backdoor" ]; then :; else addPosPoints ${backdoor[@]}*$backdoorValue
+	if [ -z "$backdoor" ]; then :; else addPosPoints ${backdoor[@]}*"$backdoorValue"
 		for i in "${backdoor[@]}" ; do
-			if pgrep -x $i > /dev/null ; then
+			if pgrep -x "$i" > /dev/null ; then
 				recordMiss 'Backdoor '
 			else
-				recordHit 'Backdoor '$i' removed.' $backdoorValue
+				recordHit 'Backdoor '"$i"' removed.' "$backdoorValue"
 			fi
 		done
 	fi
@@ -721,7 +721,7 @@ checkRelease(){ #Check for version of Ubuntu (not implemented yet)
 
 #---------------------Categories---------------------#
 userManagement(){
-echo '<H3>USER MANAGEMENT</H3>' >> $index
+echo '<H3>USER MANAGEMENT</H3>' >> "$index"
 goodUser
 badUser
 newUser
@@ -735,7 +735,7 @@ userInGroup
 }
 
 securityPolicies(){
-echo '<H3>SECURITY POLICIES</H3>' >> $index
+echo '<H3>SECURITY POLICIES</H3>' >> "$index"
 disableGuest
 disableAutoLogin
 disableUserGreeter
@@ -750,7 +750,7 @@ checkPassCompx
 }
 
 programManagement(){
-echo '<H3>PROGRAMS</H3>' >> $index
+echo '<H3>PROGRAMS</H3>' >> "$index"
 goodProgram
 badProgram
 goodService
@@ -758,12 +758,12 @@ badService
 }
 
 fileManagement(){
-echo '<H3>FILE MANAGEMENT</H3>' >> $index
+echo '<H3>FILE MANAGEMENT</H3>' >> "$index"
 badFile
 }
 
 miscPoints(){
-echo '<H3>MISCELLANEOUS</H3>' >> $index
+echo '<H3>MISCELLANEOUS</H3>' >> "$index"
 #backdoor
 checkHosts
 badCron

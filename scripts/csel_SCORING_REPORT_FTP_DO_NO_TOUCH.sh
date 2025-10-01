@@ -6,7 +6,7 @@ HOST='#SERVER#'
 USER='#USER#'
 PASSWD='#PASSWORD#'
 FILE='#FILENAME#'
-cd /usr/local/bin/
+cd /usr/local/bin/ || exit
 echo 'Starting ftp'
 ftp -n $HOST << END_SCRIPT
 quote USER $USER

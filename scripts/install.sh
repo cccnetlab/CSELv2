@@ -11,8 +11,8 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 #Merge the config with the code, output it to csel file
 echo 'Merging csel.cfg with payload...'
 cat csel.cfg "$PROJECT_ROOT/data/payload" > /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
-sed -i "s/%KERNEL%/"`uname -r`"/g" /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
-sed -i "s/%INSTALLDATE%/"`date +%s`"/g" /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
+sed -i "s/%KERNEL%/"$(uname -r)"/g" /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
+sed -i "s/%INSTALLDATE%/"$(date +%s)"/g" /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
 echo -e 'DONE\nInstalling csel into /usr/local/bin...'
 chmod 777 /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH #Make it executable
 cp "$PROJECT_ROOT/src/uniqueID.py" /usr/local/bin/uniqueID.py
@@ -57,7 +57,7 @@ echo -e 'DONE\nFiring csel for the first time...'
 
 #Finish up
 scoreReportLoc=$( grep -Po '(?<=indexD=\().*?(?=\))' csel.cfg )
-cd $scoreReportLoc
+cd $scoreReportLoc || exit
 rm ScoreReport.html
 ln /usr/local/bin/ScoreReport.html
-echo -e 'DONE\n----------------------------------\n\nScore Report is located at:' $scoreReportLoc
+echo -e 'DONE\n----------------------------------\n\nScore Report is located at:' "$scoreReportLoc"

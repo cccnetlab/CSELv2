@@ -13,8 +13,9 @@ import types
 
 
 def isUserAdmin():
-    if os.name == 'nt':
+    if os.name == "nt":
         import ctypes
+
         # WARNING: requires Windows XP SP2 or higher!
         try:
             return ctypes.windll.shell32.IsUserAnAdmin()
@@ -22,15 +23,17 @@ def isUserAdmin():
             traceback.print_exc()
             print("Admin check failed, assuming not an admin.")
             return False
-    elif os.name == 'posix':
+    elif os.name == "posix":
         # Check for root on Posix
         return os.getuid() == 0
     else:
-        raise RuntimeError("Unsupported operating system for this module: %s" % (os.name,))
+        raise RuntimeError(
+            "Unsupported operating system for this module: %s" % (os.name,)
+        )
 
 
 def runAsAdmin(cmdLine=None, wait=True):
-    if os.name != 'nt':
+    if os.name != "nt":
         raise RuntimeError("This function is only implemented on Windows.")
 
     import win32con, win32event, win32process
@@ -46,10 +49,10 @@ def runAsAdmin(cmdLine=None, wait=True):
     cmd = '"%s"' % (cmdLine[0],)
     # XXX TODO: isn't there a function or something we can call to massage command line params?
     params = " ".join(['"%s"' % (x,) for x in cmdLine[1:]])
-    cmdDir = ''
+    cmdDir = ""
     showCmd = win32con.SW_SHOWNORMAL
     # showCmd = win32con.SW_HIDE
-    lpVerb = 'runas'  # causes UAC elevation prompt.
+    lpVerb = "runas"  # causes UAC elevation prompt.
 
     # print "Running", cmd, params
 
@@ -59,14 +62,16 @@ def runAsAdmin(cmdLine=None, wait=True):
 
     # procHandle = win32api.ShellExecute(0, lpVerb, cmd, params, cmdDir, showCmd)
 
-    procInfo = ShellExecuteEx(nShow=showCmd,
-                              fMask=shellcon.SEE_MASK_NOCLOSEPROCESS,
-                              lpVerb=lpVerb,
-                              lpFile=cmd,
-                              lpParameters=params)
+    procInfo = ShellExecuteEx(
+        nShow=showCmd,
+        fMask=shellcon.SEE_MASK_NOCLOSEPROCESS,
+        lpVerb=lpVerb,
+        lpFile=cmd,
+        lpParameters=params,
+    )
 
     if wait:
-        procHandle = procInfo['hProcess']
+        procHandle = procInfo["hProcess"]
         obj = win32event.WaitForSingleObject(procHandle, win32event.INFINITE)
         rc = win32process.GetExitCodeProcess(procHandle)
         # print "Process handle %s returned code %s" % (procHandle, rc)
@@ -75,7 +80,8 @@ def runAsAdmin(cmdLine=None, wait=True):
 
     return rc
 
-'''
+
+"""
 def test():
     rc = 0
     if not isUserAdmin():
@@ -91,4 +97,4 @@ def test():
 
 if __name__ == "__main__":
     sys.exit(test())
-'''
+"""
