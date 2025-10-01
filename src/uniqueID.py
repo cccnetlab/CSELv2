@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import fileinput
 from tkinter import *
 from datetime import date
@@ -55,7 +57,7 @@ def retrieve():
         warnF.pack()
         Label(
             warnF,
-            text="Please fill in all of the boxes with the corect information for accurate scoring.",
+            text="Please fill in all of the boxes with the correct information for accurate scoring.",
             font=("Verdana", 10, "bold"),
         ).pack()
         Button(warnF, text="OK", command=lambda: warn.destroy()).pack()

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """
 Build script for CSEL using PyInstaller
 Compiles configurator and scoring_engine with proper asset bundling

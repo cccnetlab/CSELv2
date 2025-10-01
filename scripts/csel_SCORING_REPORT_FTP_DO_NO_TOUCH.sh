@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env sh
+
 if [ ! -f "/usr/local/bin/name" ]; then
 	exit
 fi

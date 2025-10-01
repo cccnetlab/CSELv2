@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 if [ "$EUID" -ne 0 ] ;  then
 	echo "installer must be run as root"
 	exit

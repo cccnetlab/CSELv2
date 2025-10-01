@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 html_file="your_html_file.html"
 text_file="html.txt"

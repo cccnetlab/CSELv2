@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 CSEL (Cyberpatriot Scoring Engine: Linux)
 Source package for scoring engine components
