@@ -1,5 +1,5 @@
 import fileinput
-from Tkinter import *
+from tkinter import *
 from datetime import date
 
 def retrieve():

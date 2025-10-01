@@ -12,7 +12,10 @@ from tkinter import ttk as ttk
 from tkinter import filedialog
 from tkinter import messagebox
 from ttkthemes import ThemedStyle
-import db_handler
+
+# Add parent directory to path for relative imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src import db_handler
 
 
 #Here we are declaring our data base and implementing the vulnerabilities types and categories that will be offered to the db
@@ -541,12 +544,18 @@ def resource_path(relative_path):
     Get absolute path to resource, works for dev and for PyInstaller """
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS + "/extras"
+        base_path = sys._MEIPASS + "/assets/icons"
+        if not os.path.exists(os.path.join(base_path, relative_path)):
+            # Fallback to project structure during development
+            base_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons")
+            if not os.path.exists(os.path.join(base_path, relative_path)):
+                base_path = os.path.abspath("/")
+    except Exception:
+        # Development mode - look in assets/icons relative to project root
+        base_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons")
         if not os.path.exists(os.path.join(base_path, relative_path)):
             base_path = os.path.abspath("/")
-    except Exception:
-        base_path = os.path.abspath("/")
-    
+
     return os.path.join(base_path, relative_path)
 
 

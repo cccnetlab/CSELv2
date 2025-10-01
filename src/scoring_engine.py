@@ -8,14 +8,17 @@ import time
 import datetime
 from inspect import getfullargspec
 from tkinter import messagebox
-import admin_test
-import db_handler
 import pwd,grp
 import lsb_release
 import platform
 import configparser
 from pwd import getpwnam
 import shutil
+
+# Add parent directory to path for relative imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src import admin_test
+from src import db_handler
 #check
 # Scoring Report creation
 def draw_head():

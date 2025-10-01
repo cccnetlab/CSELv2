@@ -1,7 +1,21 @@
+# PyInstaller build artifacts
 /dist
-
 /build
 
+# Python cache
 /__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+/.venv
+/venv
+*.egg-info
+
+# PyInstaller spec files
+*.spec
 
 
+.claude/
+CLAUDE.md
