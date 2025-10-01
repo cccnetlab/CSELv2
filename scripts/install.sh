@@ -11,24 +11,24 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 #Merge the config with the code, output it to csel file
 echo 'Merging csel.cfg with payload...'
 cat csel.cfg "$PROJECT_ROOT/data/payload" > /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
-sed -i "s/%KERNEL%/"$(uname -r)"/g" /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
-sed -i "s/%INSTALLDATE%/"$(date +%s)"/g" /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
+sed -i "s/%KERNEL%/$(uname -r)/g" /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
+sed -i "s/%INSTALLDATE%/$(date +%s)/g" /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH
 echo -e 'DONE\nInstalling csel into /usr/local/bin...'
 chmod 777 /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH #Make it executable
 cp "$PROJECT_ROOT/src/uniqueID.py" /usr/local/bin/uniqueID.py
-if [[ $( grep 'FTPServer' csel.cfg ) ]] ;  then
+if grep -q 'FTPServer' csel.cfg ;  then
 	cp "$PROJECT_ROOT/scripts/csel_SCORING_REPORT_FTP_DO_NO_TOUCH.sh" /usr/local/bin/csel_SCORING_REPORT_FTP_DO_NO_TOUCH
 	chmod 777 /usr/local/bin/csel_SCORING_REPORT_FTP_DO_NO_TOUCH #Make it executable
 	if [ -f "$PROJECT_ROOT/data/FTP.txt" ]; then
 		cp "$PROJECT_ROOT/data/FTP.txt" /usr/local/bin/FTP.txt
 	fi
-	if [[ $(crontab -l -u root | grep FTP) ]] ; then :; else
+	if crontab -l -u root | grep -q FTP ; then :; else
 		(crontab -l -u root ; echo "* * * * * /usr/local/bin/csel_SCORING_REPORT_FTP_DO_NO_TOUCH") | crontab -
 	fi
 fi
 #Check for crontab entry, add it if it doesn't exist
 echo -e 'DONE\nAdding crontab entry...'
-if [[ $(crontab -l -u root | grep ENGINE) ]] ; then :; else
+if crontab -l -u root | grep -q ENGINE ; then :; else
 	(crontab -l -u root ; echo "1 * * * * /usr/local/bin/csel_SCORING_ENGINE_DO_NOT_TOUCH") | crontab -
 fi
 
@@ -57,7 +57,8 @@ echo -e 'DONE\nFiring csel for the first time...'
 
 #Finish up
 scoreReportLoc=$( grep -Po '(?<=indexD=\().*?(?=\))' csel.cfg )
-cd $scoreReportLoc || exit
+cd "$scoreReportLoc" || exit
 rm ScoreReport.html
+# Where is this supposed to be linked to??? Command currently does nothing...
 ln /usr/local/bin/ScoreReport.html
 echo -e 'DONE\n----------------------------------\n\nScore Report is located at:' "$scoreReportLoc"
