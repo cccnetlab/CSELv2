@@ -13,14 +13,11 @@ ttkthemes>=3.2.0
 # Process and system utilities
 psutil>=5.9.0
 
-# Linux distribution info
-lsb-release>=0.1.0
-
 # PyInstaller for building binaries
 pyinstaller>=6.0.0
 
-# Note: The following must be installed via system package manager:
+# Note: The following must be installed via system package manager(Attempted in build.py):
 # - python3-tk (for tkinter GUI support)
-# - lsb-release (system package for Linux distribution detection)
+# - lsb-release >=0.1.0 (system package for Linux distribution detection)
 #
 # Ubuntu/Debian: sudo apt-get install python3-tk lsb-release
