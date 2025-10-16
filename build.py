@@ -25,12 +25,11 @@ def clean_build():
             shutil.rmtree(dir_name)
             print(f"  Removed {dir_name}/")
 
-    # Remove spec files
+    # Remove spec files from 
     for spec_file in ["configurator.spec", "scoring_engine.spec"]:
         if os.path.exists(spec_file):
             os.remove(spec_file)
             print(f"  Removed {spec_file}")
-
 
 def build_configurator():
     """
@@ -38,13 +37,14 @@ def build_configurator():
     """
 
     print("\n" + "=" * 60)
-    print("Building configurator...")
-    print("=" * 60)
+    print("\nBuilding configurator...")
+    print("\n" + "=" * 60)
 
     cmd = [
         "pyinstaller",
         "--onefile",
-        "--name=configurator",
+        "--name=configurator_DO_NOT_TOUCH",
+        "--distpath=dist",
         "--add-data=assets/icons:assets/icons",
         "--add-data=src/db_handler.py:src",
         "--add-data=src/admin_test.py:src",
@@ -58,7 +58,6 @@ def build_configurator():
         print("\n✓ Configurator built successfully: dist/configurator")
     return result.returncode
 
-
 def build_scoring_engine():
     """
     Build scoring_engine binary with PyInstaller
@@ -66,12 +65,13 @@ def build_scoring_engine():
 
     print("\n" + "=" * 60)
     print("Building scoring_engine...")
-    print("=" * 60)
+    print("\n" + "=" * 60)
 
     cmd = [
         "pyinstaller",
         "--onefile",
-        "--name=scoring_engine",
+        "--name=scoring_engine_DO_NOT_TOUCH",
+        "--distpath=dist",
         "--add-data=src/db_handler.py:src",
         "--add-data=src/admin_test.py:src",
         "src/scoring_engine.py",
@@ -160,7 +160,7 @@ def check_requirements(requirements_file="requirements.txt"):
     """
     
     print("\n" + "=" * 60)
-    print("Checking for required packages...\n")
+    print("\nChecking for required packages...\n")
     print("\n" + "=" * 60)
 
     # Detect OS type
@@ -213,9 +213,79 @@ def check_requirements(requirements_file="requirements.txt"):
 
     print("\n✓ All required packages are installed\n")
 
+# def ensure_crontab_entry():
+#     """
+#     Ensure a specific crontab entry exists for the scoring_engine on startup. If not, add it.
+#     """
+
+#     print("\n" + "=" * 60)
+#     print("\nChecking for crontab entry...")
+#     print("\n" + "=" * 60)
+
+#     cron_line = "@reboot /usr/local/bin/csel/scoring_engine_DO_NOT_TOUCH"  # Run at startup
+#     try:
+#         # Get current root crontab
+#         result = subprocess.run(["crontab", "-l", "-u", "root"], capture_output=True, text=True)
+#         current_crontab = result.stdout if result.returncode == 0 else ""
+
+#         # Check if the @reboot scoring_engine entry exists
+#         if "scoring_engine_DO_NOT_TOUCH" in current_crontab and "@reboot" in current_crontab:
+#             print("Crontab @reboot entry already exists.")
+#             return
+
+#         # Add the new entry
+#         new_crontab = current_crontab.rstrip() + "\n" + cron_line + "\n"
+#         proc = subprocess.run(["crontab", "-", "-u", "root"], input=new_crontab, text=True)
+#         if proc.returncode == 0:
+#             print("✓ Crontab entry added successfully.")
+#         else:
+#             raise Exception("Failed to add crontab entry.")
+#     except Exception as e:
+#         print(f"Error managing crontab: {e}")
+#         sys.exit(1)
+
+# def setup_cyberpatriot_directory(project_root="."):
+#     """
+#     Ensure /etc/CYBERPATRIOT_DO_NOT_REMOVE exists and copy icons there.
+
+#     Args:
+#         project_root (str): Root directory of the project(build.py should run in root by default).
+#     """
+
+#     print("\n" + "=" * 60)
+#     print("\nChecking for CYBER assets directory...")
+#     print("\n" + "=" * 60)
+
+#     target_dir = "/etc/CYBERPATRIOT_DO_NOT_REMOVE" # Directory to store icons and score file
+#     icons = [
+#         "logo.png",
+#         "iguana.png",
+#         "CCC_logo.png",
+#         "SoCalCCCC.png"
+#     ]
+#     icons_src_dir = os.path.join(project_root, "assets", "icons") # Source directory for icons
+
+#     # Create directory and copy icons if it doesn't exist
+#     if not os.path.isdir(target_dir):
+#         print('Creating /etc/CYBERPATRIOT directory for icons...')
+#         os.makedirs(target_dir, exist_ok=True) # Create the directory
+
+#         # Copy icons one by one
+#         for icon in icons:
+#             src = os.path.join(icons_src_dir, icon)
+#             dst = os.path.join(target_dir, icon)
+#             shutil.copyfile(src, dst)
+#         open(os.path.join(target_dir, "score.txt"), "a").close()  # Create score.txt
+#         print("✓ CYBER directory and assets created successfully.")
+#     else:
+#         print("CYBER directory already exists. Skipping creation.")
+
 
 def main():
-    """Main build process"""
+    """
+    Main build process
+    """
+    
     print("CSEL Build Script")
     print("=" * 60)
 
@@ -252,16 +322,47 @@ def main():
         result1 = build_configurator()
         result2 = build_scoring_engine()
 
+        # # Check and install scoring_engine Cronjob as well as the CYBER directory for assets.
+        # ensure_crontab_entry()
+        # setup_cyberpatriot_directory()
+
+        # Launch the binaries
+        try:
+            configurator_bin = "/usr/local/bin/csel/configurator_DO_NOT_TOUCH"
+            scoring_engine_bin = "/usr/local/bin/csel/scoring_engine_DO_NOT_TOUCH"
+            
+            # Attempt to launch configurator
+            rint("\nLaunching configurator...")
+            current_binary = "configurator"
+            if os.path.exists(configurator_bin):
+                subprocess.run(["sudo", "-E", configurator_bin])
+            else:
+                raise Exception(f"Configurator binary not found at {configurator_bin}")
+            
+            # Attempt to launch scoring_engine
+            print("\nLaunching scoring_engine...")
+            current_binary = "scoring_engine"  
+            if os.path.exists(scoring_engine_bin):
+                # Launch in background using Popen
+                subprocess.Popen(["sudo", "-E", scoring_engine_bin])
+            else:
+                raise Exception(f"Scoring engine binary not found at {scoring_engine_bin}")
+                sys.exit(1)
+
+        except Exception as e:
+            print(f"Failed to launch {current_binary}: {e}")
+
+
         if result1 == 0 and result2 == 0:
             print("\n" + "=" * 60)
-            print("✓ Build completed successfully!")
+            print("✓ Build and configuration completed successfully!")
             print("=" * 60)
             print("\nBinaries location:")
-            print("  dist/configurator")
-            print("  dist/scoring_engine")
+            print("/usr/local/bin/csel")
             print("\nNext steps:")
-            print("  1. Test binaries: sudo -E dist/configurator")
-            print("  2. Run install script: sudo scripts/install.sh")
+            print("  1. Rerun configurator: sudo -E /usr/local/bin/csel/configurator_DO_NOT_TOUCH")
+            print("  2. Rerun scoring engine: sudo -E /usr/local/bin/csel/scoring_engine_DO_NOT_TOUCH &")
+            print("  3. For scoring, only the scoring engine needs to run continuously after the configurator is used to set vulnerabilities.")
         else:
             print("\n✗ Build failed with errors")
             sys.exit(1)
