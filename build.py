@@ -222,7 +222,7 @@ def check_requirements(requirements_file="requirements.txt"):
 #     print("\nChecking for crontab entry...")
 #     print("\n" + "=" * 60)
 
-#     cron_line = "@reboot /usr/local/bin/csel/scoring_engine_DO_NOT_TOUCH"  # Run at startup
+#     cron_line = "@reboot dist/scoring_engine_DO_NOT_TOUCH"  # Run at startup
 #     try:
 #         # Get current root crontab
 #         result = subprocess.run(["crontab", "-l", "-u", "root"], capture_output=True, text=True)
@@ -273,8 +273,8 @@ def check_requirements(requirements_file="requirements.txt"):
 #         # Copy icons one by one
 #         for icon in icons:
 #             src = os.path.join(icons_src_dir, icon)
-#             dst = os.path.join(target_dir, icon)
-#             shutil.copyfile(src, dst)
+#             dist = os.path.join(target_dir, icon)
+#             shutil.copyfile(src, dist)
 #         open(os.path.join(target_dir, "score.txt"), "a").close()  # Create score.txt
 #         print("✓ CYBER directory and assets created successfully.")
 #     else:
@@ -324,12 +324,14 @@ def main():
 
         # # Check and install scoring_engine Cronjob as well as the CYBER directory for assets.
         # ensure_crontab_entry()
-        # setup_cyberpatriot_directory()
+
+        # TODO: Create a symbolic link in /usr/local/bin or use systemctl to manage service instead of crontab
+        # TODO: Migrate and cotinue consolidating install.sh
 
         # Launch the binaries
         try:
-            configurator_bin = "/usr/local/bin/csel/configurator_DO_NOT_TOUCH"
-            scoring_engine_bin = "/usr/local/bin/csel/scoring_engine_DO_NOT_TOUCH"
+            configurator_bin = "dist/configurator"
+            scoring_engine_bin = "dist/scoring_engine"
             
             # Attempt to launch configurator
             rint("\nLaunching configurator...")
@@ -358,10 +360,10 @@ def main():
             print("✓ Build and configuration completed successfully!")
             print("=" * 60)
             print("\nBinaries location:")
-            print("/usr/local/bin/csel")
+            print("/dist")
             print("\nNext steps:")
-            print("  1. Rerun configurator: sudo -E /usr/local/bin/csel/configurator_DO_NOT_TOUCH")
-            print("  2. Rerun scoring engine: sudo -E /usr/local/bin/csel/scoring_engine_DO_NOT_TOUCH &")
+            print("  1. Rerun configurator: sudo -E dist/configurator_DO_NOT_TOUCH")
+            print("  2. Rerun scoring engine: sudo -E dist/scoring_engine_DO_NOT_TOUCH &")
             print("  3. For scoring, only the scoring engine needs to run continuously after the configurator is used to set vulnerabilities.")
         else:
             print("\n✗ Build failed with errors")

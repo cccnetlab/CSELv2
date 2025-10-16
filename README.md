@@ -3,6 +3,8 @@
 
 CSEL is a scoring engine written in Python(currently python 3.12.3) for scoring Linux CyberPatriot-like images. It is configured by adding scoring options into the save_data.db and running the scoringEngine executable. It now includes a web page Score Report. It works with Ubuntu.
 
+*If making changes, please look at **DeveloperGuide.md** for more information*
+
 ## Scorable Actions
 ### Gaining Points
 - Deleting "bad" users
@@ -47,13 +49,16 @@ CSEL can be run with "silent misses" which simulates a CyberPatriot round where 
 2. Clone into image by using: sudo git clone https://github.com/cccnetlab/CSELv2.git
 3. (Optional) Set up virtual environment for dependencies:
    * For debian/Ubuntu: **apt install python3.12-venv** 
-      * Create venv: **python3 -m venv .venv**
+      * Create venv: **python3 -m venv .venv** 
       * Activate venv: **source .venv/bin/activate**
-4. Run **python3 build.py** to ensure and install depencencies and create binaries.
-5. Run '''bash
-sudo run ./configurator
-''' to start the UI. 
-6. Once you have checked all the flags and click run, you can (and should) delete the configurator executable.
+4. Run **python3 build.py**(**!!!MAKE SURE TO NOT RUN SUDO!!!, will break venv**) to ensure and install depencencies and create binaries.
+5. The scoring engine should now run on startup via crontab, however without a reboot you need to run it manually with:    
+   
+   `sudo bash /usr/local/bin/csel/scoring_engine_DO_NOT_TOUCH`
+
+6. Run 'bash sudo run ./configurator'
+to start the UI. 
+7. Once you have checked all the flags and click run, you can (and should) delete the configurator executable.
 
 ## GUI
 1. To install download the Following

@@ -1,6 +1,12 @@
 # CSELv2.1 Developer Guide
 ## Filestructure summary
-### build.py
+### src
+Contains all python files essential to scoring enginer functionality.
+
+### setup
+Contains all files essential to setting up the proper binaries, dependencies, and folder structure.
+
+#### build.py
 
 - Removes previous build artifacts with clean_build().
 - Checks for tktinter, lsb-release, and pip and installs them automatically.

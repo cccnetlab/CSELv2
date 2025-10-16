@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+"""
+This is the main scoring engine script for CSEL.
+"""
+
 import socket
 import sys
 import traceback
