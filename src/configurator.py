@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/home/jkim/Desktop/CSELv2/.venv/bin/python3
+# ^ For testing
+
+## !/usr/bin/env python3
+#^ Original shebang line
 
 import os
 import subprocess
@@ -259,13 +263,20 @@ vuln_settings = {}
 
 # class called to make us a scrollable page
 class VerticalScrolledFrame(Frame):
-    """A pure Tkinter scrollable frame that actually works!
-    * Use the 'interior' attribute to place widgets inside the scrollable frame
-    * Construct and pack/place/grid normally
-    * This frame only allows vertical scrolling
+    """
+    A pure Tkinter scrollable frame that allows vertical scrolling.
+    Use the 'interior' attribute to place widgets inside the scrollable frame.
     """
 
     def __init__(self, parent, *args, **kw):
+        """
+        Initialize the scrollable frame, canvas, and scrollbar.
+
+        Args:
+            parent (tk.Widget): Parent widget.
+            *args: Variable length argument list.
+            **kw: Arbitrary keyword arguments.
+        """
         Frame.__init__(self, parent, *args, **kw)
         # create a canvas object and a vertical scrollbar for scrolling it
         self.canvas = canvas = Canvas(self, bd=0, highlightthickness=0)
@@ -307,7 +318,26 @@ class VerticalScrolledFrame(Frame):
 
 # this class declares most of our ui, pulling from the db, it generates a checkbox under the right category
 class Config(Tk):
+    """
+    Main GUI class for the configurator application.
+    Builds the UI, loads settings and vulnerabilities, and manages user interaction.
+
+    Args:
+        *args: Variable length argument list.
+        **kwargs: Arbitrary keyword arguments.
+
+    Returns:
+        None
+    """
+
     def __init__(self, *args, **kwargs):
+        """
+        Initialize the Configurator window, load settings, and build UI pages.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         Tk.__init__(self, *args, **kwargs)
 
         # elevated privilege is needed to run our commands, it asks on boot
@@ -491,6 +521,16 @@ class Config(Tk):
         nb.pack(expand=1, fill="both")
 
     def add_option(self, frame, entry, name, row, return_frame):
+        """
+        Add a vulnerability option to the UI with checkboxes and controls.
+
+        Args:
+            frame (tk.Frame): Parent frame to add widgets.
+            entry (dict): Vulnerability settings.
+            name (str): Vulnerability name.
+            row (int): Row index for grid placement.
+            return_frame (tk.Frame): Frame to return to after modification.
+        """
         ttk.Checkbutton(frame, text=name, variable=entry[1]["Enabled"]).grid(
             row=row, column=0, stick=W
         )
@@ -512,6 +552,14 @@ class Config(Tk):
         )
 
     def modify_settings(self, name, entry, packing):
+        """
+        Show the modification UI for a vulnerability option.
+
+        Args:
+            name (str): Vulnerability name.
+            entry (dict): Vulnerability settings.
+            packing (tk.Frame): Frame to return to after modification.
+        """
         self.pack_slaves()[0].pack_forget()
         modifyPage = VerticalScrolledFrame(self)
         modifyPage.pack(expand=1, fill="both")
@@ -561,6 +609,12 @@ class Config(Tk):
                 load_modify_settings(modifyPageList, entry, name, vuln)
 
     def generate_report(self, frame):
+        """
+        Generate and display the scoring report in the UI.
+
+        Args:
+            frame (tk.Frame): Frame to display the report.
+        """
         save_config()
         for i in frame.grid_slaves():
             i.destroy()
@@ -628,6 +682,18 @@ class Config(Tk):
 
 
 def load_modify_settings(frame, entry, name, idx):
+    """
+    Load and display the modification controls for a vulnerability option.
+
+    Args:
+        frame (tk.Frame): Parent frame to add widgets.
+        entry (dict): Vulnerability settings.
+        name (str): Vulnerability name.
+        idx (int): Index of the vulnerability option.
+
+    Returns:
+        None
+    """
     modifyPageListRow = ttk.Frame(frame)
     modifyPageListRow.pack(fill=X)
     ttk.Entry(modifyPageListRow, width=10, textvariable=entry[idx]["Points"]).grid(
@@ -723,6 +789,17 @@ def load_modify_settings(frame, entry, name, idx):
 
 
 def add_row(frame, entry, name):
+    """
+    Add a new row for a vulnerability option in the modification UI.
+
+    Args:
+        frame (tk.Frame): Parent frame to add widgets.
+        entry (dict): Vulnerability settings.
+        name (str): Vulnerability name.
+
+    Returns:
+        None
+    """
     idx = Vulnerabilities.add_to_table(name).id
     entry.update({idx: Vulnerabilities.get_option_table(name)[idx]})
 
@@ -812,11 +889,33 @@ def add_row(frame, entry, name):
 
 
 def remove_row(entry, idx, widget):
+    """
+    Remove a row from the vulnerability option table and UI.
+
+    Args:
+        entry (dict): Vulnerability settings.
+        idx (int): Index of the row to remove.
+        widget (tk.Widget): Widget to destroy.
+
+    Returns:
+        None
+    """
     del entry[idx]
     widget.destroy()
 
 
 def set_file_or_directory(var, switch, mode):
+    """
+    Set the file or directory path for a vulnerability option.
+
+    Args:
+        var (dict): Dictionary of Tkinter variables for the option.
+        switch (tk.IntVar): Variable indicating directory selection.
+        mode (str): Vulnerability mode (e.g., "File Permissions").
+
+    Returns:
+        None
+    """
     if switch.get() == 1:
         file = filedialog.askdirectory()
         var["File Path"].set(file)
@@ -832,6 +931,15 @@ def set_file_or_directory(var, switch, mode):
 
 # check
 def create_forensic():
+    """
+    Create forensic question files on the desktop if enabled.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
     qHeader = (
         "This is a forensics question. Answer it below\n------------------------\n"
     )
@@ -862,10 +970,17 @@ def create_forensic():
                 )
                 g.close()
 
-
+# TODO: See if changing this has any effect
 def resource_path(relative_path):
-    """https://stackoverflow.com/questions/7674790/bundling-data-files-with-pyinstaller-onefile/13790741#13790741
-    Get absolute path to resource, works for dev and for PyInstaller"""
+    """
+    Get absolute path to resource, works for dev and for PyInstaller.
+
+    Args:
+        relative_path (str): Relative path to the resource.
+
+    Returns:
+        str: Absolute path to the resource.
+    """
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS + "/assets/icons"
@@ -892,24 +1007,34 @@ def resource_path(relative_path):
 
 
 def commit_config():
+    """
+    Save configuration, copy assets, set permissions, and schedule scoring engine via cron.
 
+    Args:
+        None
+
+    Returns:
+        None
+    """
     save_config()
 
     # check
-    output_directory = "/etc/CYBERPATRIOT/"
+    output_directory = "/etc/CYBERPATRIOT_DO_NOT_REMOVE/"
     web_directory = "/var/www/CYBERPATRIOT"
     current_directory = os.getcwd()
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
     if not os.path.exists(web_directory):
         os.makedirs(web_directory)
-    shutil.copy(
-        resource_path("scoring_engine"),
-        os.path.join(output_directory, "scoring_engine"),
-    )
+    # TODO: Check if still redundant due to service_setup.py
+    # print(find_absolute_path("scoring_engine_DO_NOT_TOUCH"))
+    # shutil.copy(
+    #     find_absolute_path("scoring_engine_DO_NOT_TOUCH"),
+    #     os.path.join(output_directory, "scoring_engine_DO_NOT_TOUCH"),
+    # )
     shutil.copy(
         resource_path("ScoringEngineLinuxBig.png"),
-        output_directory + "ScoringEngineLinuxBig.png",
+        output_directory + "ScoringEngineLinuxBig.png", #Places a copy in /etc/CYBERPATRIOT_DO_NOT_REMOVE/
     )
 
     shutil.copy(
@@ -922,7 +1047,7 @@ def commit_config():
         resource_path("ScoringEngineLinuxBig.png"),
         os.path.join(web_directory + "/ScoringEngineLinuxBig.png"),
     )
-    os.chmod(output_directory + "scoring_engine", 0o777)
+    os.chmod("/etc/systemd/system/scoring_engine.service", 0o777)
     os.chmod(web_directory + "/CCC_logo.png", 0o777)
     os.chmod(web_directory + "/SoCalCCCC.png", 0o777)
     os.chmod(web_directory + "/ScoringEngineLinuxBig.png", 0o777)
@@ -942,46 +1067,55 @@ def commit_config():
         int(os.environ["SUDO_UID"]),
     )
 
-    cron = CronTab(user=os.environ["USER"])
-    command = output_directory + "scoring_engine"
-    schedule = "* * * * *"
+    # TODO: Handled via systemd service instead of cron job
+    # cron = CronTab(user=os.environ["USER"])
+    # command = output_directory + "scoring_engine"
+    # schedule = "* * * * *"
 
-    # fix / check
-    if command not in cron:
-        try:
-            # Create a new cron job
-            job = cron.new(command=command, comment="my_cron_job")
+    # if command not in cron:
+    #     try:
+    #         # Create a new cron job
+    #         job = cron.new(command=command, comment="my_cron_job")
 
-            # Set the schedule for the cron job
-            job.setall(schedule)
+    #         # Set the schedule for the cron job
+    #         job.setall(schedule)
 
-            # Write the job to the crontab
-            job.enable()
+    #         # Write the job to the crontab
+    #         job.enable()
 
-            # Write the changes to the crontab
-            cron.write()
-            job = cron.new(command=command, comment="my_cron_job")
-            # Create a new cron job
+    #         # Write the changes to the crontab
+    #         cron.write()
+    #         job = cron.new(command=command, comment="my_cron_job")
+    #         # Create a new cron job
 
-            # Set the schedule for the cron job
-            job.setall("@reboot")
+    #         # Set the schedule for the cron job
+    #         job.setall("@reboot")
 
-            # Write the job to the crontab
-            job.enable()
+    #         # Write the job to the crontab
+    #         job.enable()
 
-            # Write the changes to the crontab
-            cron.write()
-        except subprocess.CalledProcessError as e:
-            show_error(e)
-    for proc in psutil.process_iter(["name"]):
-        if proc.info["name"] == "scoring_engine":
-            sys.exit()
-    subprocess.Popen(command, shell=True)
+    #         # Write the changes to the crontab
+    #         cron.write()
+    #     except subprocess.CalledProcessError as e:
+    #         show_error(e)
+    # for proc in psutil.process_iter(["name"]):
+    #     if proc.info["name"] == "scoring_engine":
+    #         sys.exit()
+    # subprocess.Popen(command, shell=True)
     sys.exit()
 
 
 # check
 def save_config():
+    """
+    Save current configuration and vulnerability settings to the database and create forensic files.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
     desk = f'/home/{os.environ.get("SUDO_USER")}/Desktop'
     if desk not in root.MenuSettings["Desktop"].get():
         root.MenuSettings["Desktop"].set(
@@ -997,6 +1131,15 @@ def save_config():
 
 # score count
 def tally():
+    """
+    Calculate and update the total points and vulnerabilities based on current settings.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
     # Set tally scores
     tally_score = 0
     tally_vuln = 0
@@ -1017,6 +1160,15 @@ def tally():
 
 
 def get_service_list():
+    """
+    Get a list of available system services.
+
+    Args:
+        None
+
+    Returns:
+        list: List of service names.
+    """
     command = "systemctl list-unit-files --type=service --no-pager --plain --no-legend"
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     services = []
@@ -1027,6 +1179,15 @@ def get_service_list():
 
 
 def get_user_list():
+    """
+    Get a list of system users.
+
+    Args:
+        None
+
+    Returns:
+        list: List of user names.
+    """
     user_list = []
     for user in pwd.getpwall():
         user_list.append(user[0])
@@ -1034,6 +1195,15 @@ def get_user_list():
 
 
 def get_group_list():
+    """
+    Get a list of system groups.
+
+    Args:
+        None
+
+    Returns:
+        list: List of group names.
+    """
     group_list = []
     for group in grp.getgrall():
         group_list.append(group[0])
@@ -1041,6 +1211,16 @@ def get_group_list():
 
 
 def show_error(self, *args):
+    """
+    Display an error message in a Tkinter messagebox.
+
+    Args:
+        self: Exception context (Tkinter callback).
+        *args: Exception arguments.
+
+    Returns:
+        None
+    """
     err = traceback.format_exception(*args)
     for i in err:
         if "expected integer but got" in i:
@@ -1049,11 +1229,29 @@ def show_error(self, *args):
 
 
 def change_theme(style_array):
+    """
+    Change the current theme of the application.
+
+    Args:
+        style_array (tk.StringVar): Theme name variable.
+
+    Returns:
+        None
+    """
     root.ttkStyle.set_theme(style_array.get())
 
 
 #  region theme settings
 def generate_export(extension):
+    """
+    Export the current configuration and report to an HTML file.
+
+    Args:
+        extension (str): File extension for export (e.g., ".html").
+
+    Returns:
+        None
+    """
     save_config()
     default = False
     saveLocation = filedialog.asksaveasfilename(

@@ -15,11 +15,12 @@ import datetime
 from inspect import getfullargspec
 from tkinter import messagebox
 import pwd, grp
-import lsb_release
+#import lsb_release
 import platform
 import configparser
 from pwd import getpwnam
 import shutil
+import warnings
 
 # Add parent directory to path for relative imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,6 +31,11 @@ from src import db_handler
 # check
 # Scoring Report creation
 def draw_head():
+    """
+    Creates the header of the scoring report HTML file.
+    Initializes the HTML structure and includes title and refresh meta tag.
+    Writes the initial content to the score index file.
+    """
     file = open(scoreIndex, "w+")
     file.write(
         '<!doctype html><html><head><title>CSEL Score Report</title><meta http-equiv="refresh" content="60"></head><body style="background-color:powderblue;">'
@@ -46,6 +52,13 @@ def draw_head():
 
 
 def record_hit(name, points):
+    """
+    Records a successful scoring event.
+    
+    Args:
+        name (str): The name of the scoring event.
+        points (int): The points awarded for the event.
+    """
     global total_points, total_vulnerabilities
     write_to_html(
         ('<p style="color:green">' + name + " (" + str(points) + " points)</p>")
@@ -55,11 +68,24 @@ def record_hit(name, points):
 
 
 def record_miss(name):
+    """
+    Records a missed scoring event.
+    
+    Args:
+        name (str): The name of the missed scoring event.
+    """
     if not menuSettings["Silent Mode"]:
         write_to_html(('<p style="color:red">MISS ' + name + " Issue</p>"))
 
 
 def record_penalty(name, points):
+    """
+    Records a penalty event, deducting points.
+    
+    Args:
+        name (str): The name of the penalty event.
+        points (int): The points to deduct for the penalty.
+    """
     global total_points
     write_to_html(
         ('<p style="color:red">' + name + " (" + str(points) + " points)</p>")
@@ -68,6 +94,12 @@ def record_penalty(name, points):
 
 
 def display_html_sh(path):
+    """
+    Creates a .desktop file for the scoring report on the user's desktop.
+    
+    Args:
+        path (str): The path to the user's desktop directory.
+    """
     with open(path + "ScoringReport.desktop", "w") as dt_f:
         dt_f.write(
             """[Desktop Entry]
@@ -81,6 +113,11 @@ Terminal = false"""
 
 
 def draw_tail():
+    """
+    Completes the scoring report HTML file by adding the footer content.
+    Updates the score and vulnerabilities in the HTML file.
+    Sets permissions and ownership for the score index file.
+    """
     write_to_html('<hr><div align="center"><b>Coastline College</b>')
     replace_section(scoreIndex, "#TotalScore#", str(total_points))
     replace_section(scoreIndex, "#TotalVuln#", str(total_vulnerabilities))
@@ -102,6 +139,10 @@ def draw_tail():
 
 # Extra Functions
 def check_runas():
+    """
+    Checks if the script is running with administrator privileges.
+    If not, prompts the user to run as admin and exits.
+    """
     if not admin_test.isUserAdmin():
         messagebox.showerror(
             "Administrator Access Needed",
@@ -111,6 +152,11 @@ def check_runas():
 
 
 def check_score():
+    """
+    Checks the current score against the menu settings.
+    Sends notifications if points are gained or lost.
+    Logs any exceptions that occur during the check.
+    """
     global total_points, total_vulnerabilities
     try:
         current_user = os.getlogin()
@@ -194,12 +240,26 @@ def check_score():
 
 
 def write_to_html(message):
+    """
+    Appends a message to the scoring report HTML file.
+    
+    Args:
+        message (str): The message to write to the HTML file.
+    """
     file = open(scoreIndex, "a")
     file.write(message)
     file.close()
 
 
 def replace_section(loc, search, replace):
+    """
+    Replaces a specific section in the scoring report HTML file.
+    
+    Args:
+        loc (str): The location of the HTML file.
+        search (str): The text to search for in the file.
+        replace (str): The text to replace the searched text with.
+    """
     lines = []
     with open(loc) as file:
         for line in file:
@@ -212,6 +272,12 @@ def replace_section(loc, search, replace):
 
 # Option Check
 def forensic_question(vulnerability):
+    """
+    Checks if forensic questions have been answered correctly.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for idx, vuln in enumerate(vulnerability):
         if vuln != 1:
             file = open(vulnerability[vuln]["Location"], "r")
@@ -231,6 +297,12 @@ def forensic_question(vulnerability):
 
 # fixed
 def critical_users(vulnerability):
+    """
+    Checks for critical users and records penalties if they are removed.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     users = pwd.getpwall()
     user_list = []
     for user in users:
@@ -245,6 +317,13 @@ def critical_users(vulnerability):
 
 
 def users_manipulation(vulnerability, name):
+    """
+    Checks for user manipulation actions (add/remove) and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+        name (str): The action being checked (Add User or Remove User).
+    """
     users = grp.getgrall()
     user_list = []
     for user in users:
@@ -272,6 +351,13 @@ def users_manipulation(vulnerability, name):
 
 
 def firewallVulns(vulnerability, name):
+    """
+    Checks the status of the firewall and records hits/misses based on its state.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+        name (str): The name of the vulnerability being checked.
+    """
     try:
         # Run the ufw status command and capture the output
         completed_process = subprocess.run(
@@ -286,6 +372,16 @@ def firewallVulns(vulnerability, name):
 
 
 def check_tcp(host, port):
+    """
+    Checks if a TCP port is open on a given host.
+    
+    Args:
+        host (str): The hostname or IP address to check.
+        port (int): The TCP port number to check.
+    
+    Returns:
+        bool: True if the port is open, False otherwise.
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(1)  # Set a timeout for the connection attempt
     result = sock.connect_ex((host, port))
@@ -294,6 +390,16 @@ def check_tcp(host, port):
 
 
 def check_udp(host, port):
+    """
+    Checks if a UDP port is open on a given host.
+    
+    Args:
+        host (str): The hostname or IP address to check.
+        port (int): The UDP port number to check.
+    
+    Returns:
+        bool: True if the port is open, False otherwise.
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(1)  # Set a timeout for the socket operations
     try:
@@ -307,9 +413,15 @@ def check_udp(host, port):
 
 
 def portVulns(vulnerability):
+    """
+    Checks for open ports based on the provided vulnerabilities.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
-            if str.upper(vulnerability[vuln]["Protocol"]) is "TCP":
+            if str.upper(vulnerability[vuln]["Protocol"]) == "TCP":
                 if (check_tcp(vulnerability[vuln]["IP"]), vulnerability[vuln]["Port"]):
                     record_hit(
                         "Port " + Vulnerabilities[vuln]["Port"] + " is opened.",
@@ -328,6 +440,12 @@ def portVulns(vulnerability):
 
 
 def audit_check():
+    """
+    Checks if the audit daemon is active.
+    
+    Returns:
+        bool: True if the audit daemon is active, False otherwise.
+    """
     try:
         cp = subprocess.run(
             ["systemctl", "is-active", "auditd"],
@@ -346,119 +464,187 @@ def audit_check():
 
 # fix
 def local_group_policy(vulnerability, name):
-    if name == "Minimum Password Age":
-        if (
-            30
-            <= (
-                int(
-                    re.search(
-                        r"(?<=PASS_MIN_DAYS = )\d+", policy_settings_content
-                    ).group(0)
-                )
-                if re.search(r"(?<=PASS_MIN_DAYS = )\d+", policy_settings_content)
-                else 0
-            )
-            <= 60
-        ):
-            record_hit(
-                "Minimum password age is set to 30-60.", vulnerability[1]["Points"]
-            )
-        else:
-            record_miss("Local Policy")
-    if name == "Maximum Password Age":
-        if (
-            60
-            <= (
-                int(
-                    re.search(
-                        r"(?<=PASS_MAX_DAYS = )\d+", policy_settings_content
-                    ).group(0)
-                )
-                if re.search(r"(?<=PASS_MAX_DAYS = )\d+", policy_settings_content)
-                else 0
-            )
-            <= 90
-        ):
-            record_hit(
-                "Maximum password age is set to 60-90.", vulnerability[1]["Points"]
-            )
-        else:
-            record_miss("Local Policy")
-    if name == "Maximum Login Tries":
-        if (
-            5
-            <= (
-                int(password_settings_content.get("retry"))
-                if int(password_settings_content.get("retry"))
-                else 0
-            )
-            <= 10
-        ):
-            record_hit(
-                "Maximum login tries is set to 5-10.", vulnerability[1]["Points"]
-            )
-        else:
-            record_miss("Local Policy")
-    if name == "Lockout Duration":
-        if 30 <= (
-            int(
-                re.search(r"(?<=LOGIN_TIMEOUT = )\d+", policy_settings_content).group(0)
-            )
-            if re.search(r"(?<=LOGIN_TIMEOUT = )\d+", policy_settings_content)
-            else 0
-        ):
-            record_hit("Lockout duration set is set to 30.", vulnerability[1]["Points"])
-        else:
-            record_miss("Local Policy")
-            # get rid of the following
-            # fix
-    if name == "Lockout Reset Duration":
-        if 30 <= (
-            int(
-                re.search(
-                    r"(?<=ResetLockoutCount = )\d+", policy_settings_content
-                ).group(0)
-            )
-            if re.search(r"(?<=ResetLockoutCount = )\d+", policy_settings_content)
-            else 0
-        ):
-            record_hit(
-                "Lockout counter reset is set to 30.", vulnerability[1]["Points"]
-            )
-        else:
-            record_miss("Local Policy")
-    if name == "Minimum Password Length":
-        if 10 <= (
-            int(password_settings_content.get("minlen"))
-            if int(password_settings_content.get("minlen"))
-            else 0
-        ):
-            record_hit(
-                "Minimum password length is set to 10 or more.",
-                vulnerability[1]["Points"],
-            )
-        else:
-            record_miss("Local Policy")
-    if name == "Password History":
-        if (
-            5 <= int(password_settings_content.get("remember"))
-            if int(password_settings_content.get("remember"))
-            else 0
-        ):
-            record_hit(
-                "Password history size is set to 5 or more.", vulnerability[1]["Points"]
-            )
-        else:
-            record_miss("Local Policy")
-    if name == "Audit":
-        if audit_check:
-            record_hit("Auditing is on.", vulnerability[1]["Points"])
-        else:
-            record_miss("Local Policy")
+    """
+    Checks local group policies and records hits/misses based on their settings.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+        name (str): The name of the policy being checked.
+    """
+    # Create a dictionary from the list of tuples for easier lookup
+    policy_settings_dict = dict(login_policy_settings_content)
+    
+    # Parse PAM data to extract module settings
+    pam_settings_dict = {}
+    for pam_line in pamd_policy_settings_content:
+        # Split by tabs and spaces to get components
+        parts = pam_line.split()
+        if len(parts) >= 3:
+            module_type = parts[0]  # e.g., "password"
+            control = parts[1]      # e.g., "[success=1 default=ignore]"
+            module_path = parts[2]  # e.g., "pam_unix.so"
+            
+            # Extract module options (everything after the module path)
+            if len(parts) > 3:
+                options = ' '.join(parts[3:])
+                
+                # Parse common PAM options
+                if 'remember=' in options:
+                    try:
+                        remember_match = re.search(r'remember=(\d+)', options)
+                        if remember_match:
+                            pam_settings_dict['remember'] = remember_match.group(1)
+                    except:
+                        pass
+                        
+                if 'unlock_time=' in options:
+                    try:
+                        unlock_match = re.search(r'unlock_time=(\d+)', options)
+                        if unlock_match:
+                            pam_settings_dict['unlock_time'] = unlock_match.group(1)
+                    except:
+                        pass
+                        
+                if 'deny=' in options:
+                    try:
+                        deny_match = re.search(r'deny=(\d+)', options)
+                        if deny_match:
+                            pam_settings_dict['deny'] = deny_match.group(1)
+                    except:
+                        pass
+    print(pam_settings_dict)
+    
+    # Attempts to match the policy name and check its, then records hits/misses
+    try:
+        match name:
+            case "Minimum Password Age":
+                min_days = int(policy_settings_dict.get("PASS_MIN_DAYS", 0))
+                if 30 <= min_days <= 60:
+                    record_hit(
+                        f"Minimum password age is set to {min_days} days.", vulnerability[1]["Points"]
+                    )
+                else:
+                    record_miss("Local Policy")
+                    
+            case "Maximum Password Age":
+                max_days = int(policy_settings_dict.get("PASS_MAX_DAYS", 0))
+                if 60 <= max_days <= 90:
+                    record_hit(
+                        f"Maximum password age is set to {max_days} days.", vulnerability[1]["Points"]
+                    )
+                else:
+                    record_miss("Local Policy")
+
+            case "Minimum Password Length":
+                minlen_value = password_settings_content.get("minlen")
+                if minlen_value:
+                    try:
+                        min_length = int(minlen_value)
+                        if min_length >= 10:
+                            record_hit(
+                                f"Minimum password length is set to {min_length}.",
+                                vulnerability[1]["Points"],
+                            )
+                        else:
+                            record_miss("Local Policy")
+                    except (ValueError, TypeError):
+                        record_miss("Local Policy")
+                else:
+                    record_miss("Local Policy")
+
+            case "Maximum Login Tries":
+                # Check PAM deny setting first, then LOGIN_RETRIES
+                pam_deny = pam_settings_dict.get("deny")
+                if pam_deny:
+                    try:
+                        max_attempts = int(pam_deny)
+                        if 3 <= max_attempts <= 5:
+                            record_hit(
+                                f"Account lockout threshold is set to {max_attempts} failed attempts.", vulnerability[1]["Points"]
+                            )
+                        else:
+                            record_miss("Local Policy")
+                    except (ValueError, TypeError):
+                        record_miss("Local Policy")
+                else:
+                    # Fallback to LOGIN_RETRIES from login.defs
+                    login_retries = int(policy_settings_dict.get("LOGIN_RETRIES", 0))
+                    if 3 <= login_retries <= 5:
+                        record_hit(
+                            f"Maximum login tries is set to {login_retries}.", vulnerability[1]["Points"]
+                        )
+                    else:
+                        record_miss("Local Policy")
+                    
+            case "Lockout Duration":
+                timeout = int(policy_settings_dict.get("LOGIN_TIMEOUT", 0))
+                if timeout >= 30:
+                    record_hit(f"Lockout duration is set to {timeout} seconds.", vulnerability[1]["Points"])
+                else:
+                    record_miss("Local Policy")
+                    
+            case "Lockout Reset Duration":
+                # Check both PAM settings and password settings for unlock_time
+                unlock_time = pam_settings_dict.get("unlock_time") or password_settings_content.get("unlock_time", "0")
+                try:
+                    reset_value = int(unlock_time)
+                    if reset_value >= 30:
+                        record_hit(
+                            f"Account lockout reset duration is set to {reset_value} seconds.", vulnerability[1]["Points"]
+                        )
+                    else:
+                        record_miss("Local Policy")
+                except (ValueError, TypeError):
+                    record_miss("Local Policy")
+                    
+            case "Password History":
+                # Check PAM settings first, then fallback to password settings
+                remember_value = pam_settings_dict.get("remember") or password_settings_content.get("remember")
+                if remember_value:
+                    try:
+                        history_size = int(remember_value)
+                        if history_size >= 5:
+                            record_hit(
+                                f"Password history size is set to {history_size}.", vulnerability[1]["Points"]
+                            )
+                        else:
+                            record_miss("Local Policy")
+                    except (ValueError, TypeError):
+                        record_miss("Local Policy")
+                else:
+                    record_miss("Local Policy")
+                    
+            case "Audit":
+                if audit_check():
+                    record_hit("Auditing is on.", vulnerability[1]["Points"])
+                else:
+                    record_miss("Local Policy")
+            
+            case "Disable SSH Root Login":
+                disable_SSH_Root_Login(vulnerability)
+
+
+            case "Check Kernel":
+                print("TODO: Implement check Kernel")
+
+            case _:
+                # Handle unknown policy names
+                record_miss("Local Policy")
+                print(f"Warning: Unknown policy name '{name}' in local_group_policy")
+                
+    except (KeyError, ValueError, TypeError) as e:
+        warnings.warn(f"Error processing policy '{name}': {e}")
 
 
 # test
 def group_manipulation(vulnerability, name):
+    """
+    Checks for group manipulation actions (add/remove) and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+        name (str): The action being checked (Add Admin, Remove Admin, etc.).
+    """
     groups = grp.getgrall()
     if name == "Add Admin":
         for vuln in vulnerability:
@@ -518,6 +704,12 @@ def group_manipulation(vulnerability, name):
 
 # check
 def user_change_password(vulnerability):
+    """
+    Checks if a user's password has been changed recently.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         file = open("user_" + vulnerability[vuln]["User Name"].lower() + ".txt")
         content = file.read()
@@ -546,6 +738,12 @@ def user_change_password(vulnerability):
 
 # check
 def check_startup(vulnerability):
+    """
+    Checks if specific programs are set to run at startup and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     file = open("startup.txt", "r", encoding="utf-16-le")
     content = file.read().splitlines()
     file.close()
@@ -560,6 +758,12 @@ def check_startup(vulnerability):
 
 
 def update_check_period(vulnerability):
+    """
+    Checks the update check period setting and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
             with open("/etc/apt/apt.conf.d/10periodic", "r") as config_file:
@@ -576,6 +780,12 @@ def update_check_period(vulnerability):
 
 # check
 def add_text_to_file(vulnerability):
+    """
+    Checks if specific text has been added to a file and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
             file = open(vulnerability[vuln]["File Path"], "r")
@@ -594,6 +804,12 @@ def add_text_to_file(vulnerability):
 
 # check
 def remove_text_from_file(vulnerability):
+    """
+    Checks if specific text has been removed from a file and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
             file = open(vulnerability[vuln]["File Path"], "r")
@@ -611,6 +827,12 @@ def remove_text_from_file(vulnerability):
 
 
 def start_up_apps(vulnerability):
+    """
+    Checks if specific applications are set to run at startup and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     startup_apps = []
     # List all files in the specified directory
     file_list = os.listdir("/etc/xdg/autostart")
@@ -635,6 +857,12 @@ def start_up_apps(vulnerability):
 
 
 def check_hosts(vulnerability):
+    """
+    Checks the /etc/hosts file and records hits/misses based on its content.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     hosts_file_path = "/etc/hosts"
     with open(hosts_file_path, "r") as file:
         hosts_content = file.read().strip()
@@ -648,6 +876,12 @@ def check_hosts(vulnerability):
 
 # fix
 def critical_services(vulnerability):
+    """
+    Checks for critical services and records penalties if their state has changed.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
             name = vulnerability[vuln]["Service Name"]
@@ -660,6 +894,12 @@ def critical_services(vulnerability):
 
 # fix
 def manage_services(vulnerability):
+    """
+    Checks the state of services and records hits/misses based on their status.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
             name = vulnerability[vuln]["Service Name"]
@@ -682,6 +922,12 @@ def manage_services(vulnerability):
 
 
 def disable_SSH_Root_Login(vulnerability):
+    """
+    Checks if SSH root login is disabled and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     try:
         with open("/etc/ssh/sshd_config", "r") as ssh_config_file:
             for line in ssh_config_file:
@@ -701,6 +947,12 @@ def disable_SSH_Root_Login(vulnerability):
 
 
 def check_kernel(Vulnerability):
+    """
+    Checks the kernel version against the expected version and records hits/misses.
+    
+    Args:
+        Vulnerability (str): The expected kernel version.
+    """
     kernel_version = platform.uname().release
     print("Kernel Version:", kernel_version)
     if Vulnerability is kernel_version:
@@ -710,6 +962,13 @@ def check_kernel(Vulnerability):
 
 
 def programs(vulnerability, name):
+    """
+    Checks for the presence or absence of specific programs and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+        name (str): The type of program check (Good Program, Bad Program, etc.).
+    """
     if name == "Good Program":
         for vuln in vulnerability:
             if vuln != 1:
@@ -745,6 +1004,12 @@ def programs(vulnerability, name):
 
 
 def critical_programs(vulnerability):
+    """
+    Checks for critical programs and records hits/misses based on their installation status.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
             if vulnerability[vuln]["Program Name"] not in program_content:
@@ -761,6 +1026,12 @@ def critical_programs(vulnerability):
 
 # wip
 def anti_virus(vulnerability):
+    """
+    Checks if antivirus protection is enabled and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     z = open("security.txt", "r", encoding="utf-16-le")
     content = z.read()
     z.close()
@@ -772,6 +1043,12 @@ def anti_virus(vulnerability):
 
 # test
 def bad_file(vulnerability):
+    """
+    Checks for the existence of specific files and records hits/misses based on their presence.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
             if not os.path.exists(vulnerability[vuln]["File Path"]):
@@ -786,6 +1063,12 @@ def bad_file(vulnerability):
 
 
 def permission_checks(vulnerability):
+    """
+    Checks file permissions against expected values and records hits/misses.
+    
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+    """
     for vuln in vulnerability:
         if vuln != 1:
             if (
@@ -803,6 +1086,12 @@ def permission_checks(vulnerability):
 
 
 def no_scoring_available(name):
+    """
+    Displays an error message if no scoring definition is available for a given name.
+    
+    Args:
+        name (str): The name of the item with no scoring definition.
+    """
     messagebox.showerror(
         ("No scoring for:", name),
         (
@@ -813,14 +1102,22 @@ def no_scoring_available(name):
     )
 
 
-# test
 def load_policy_settings():
+    """
+    Loads policy settings from the /etc/login.defs file and returns them as a list.
+    
+    Returns:
+        list: A list of tuples containing key-value pairs of policy settings.
+    """
     with open("/etc/login.defs", "r") as file:
         lines = file.readlines()
     login_defs_list = []
+    pamd_defs_list = []
+
+    # Scans through each line in the file and extracts key-value pairs
     for line in lines:
         line = line.strip()
-        if not line.startswith("#") and line:
+        if not line.startswith("#") and line: # Ignore comments and empty lines
             key, value = line.split()
             login_defs_list.append((key, value))
 
@@ -828,12 +1125,21 @@ def load_policy_settings():
         for line in common_password_file:
             line = line.strip()
             if line.startswith("password"):
-                login_defs_list.append(line)
+                pamd_defs_list.append(line)
 
-    return login_defs_list
+    return login_defs_list, pamd_defs_list
 
 
 def get_file_names_in_directory(directory):
+    """
+    Retrieves all file names in a specified directory and its subdirectories.
+    
+    Args:
+        directory (str): The directory to search.
+    
+    Returns:
+        list: A list of file names found in the directory.
+    """
     file_names = []
     for root, _, filenames in os.walk(directory):
         for filename in filenames:
@@ -842,6 +1148,12 @@ def get_file_names_in_directory(directory):
 
 
 def load_programs():
+    """
+    Loads the names of installed programs from /usr/bin and /snap/bin directories.
+    
+    Returns:
+        set: A set of all installed program names.
+    """
     usr_bin_file_names = get_file_names_in_directory("/usr/bin")
     snap_bin_file_names = get_file_names_in_directory("/snap/bin")
 
@@ -850,6 +1162,12 @@ def load_programs():
 
 
 def load_versions():
+    """
+    Loads the installed package versions using dpkg and returns them as a list.
+    
+    Returns:
+        list: A list of dictionaries containing package names and their versions.
+    """
     command = "dpkg -l"
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     if result.returncode == 0:
@@ -868,6 +1186,12 @@ def load_versions():
 
 # fix
 def load_password_settings():
+    """
+    Loads password settings from the /etc/security/pwquality.conf file.
+    
+    Returns:
+        dict: A dictionary of password settings.
+    """
     password_settings = {}
     with open("/etc/security/pwquality.conf", "r") as file:
         lines = file.readlines()
@@ -924,6 +1248,12 @@ def load_services():
 
 # check1
 def account_management(vulnerabilities):
+    """
+    Manages user accounts based on the provided vulnerabilities and records hits/misses.
+    
+    Args:
+        vulnerabilities (list): A list of vulnerabilities to check.
+    """
     write_to_html("<H3>USER MANAGEMENT</H3>")
     vulnerability_def = {
         "Add Admin": group_manipulation,
@@ -953,6 +1283,12 @@ def account_management(vulnerabilities):
 
 # check1
 def local_policies(vulnerabilities):
+    """
+    Manages local security policies based on the provided vulnerabilities and records hits/misses.
+    
+    Args:
+        vulnerabilities (list): A list of vulnerabilities to check.
+    """
     write_to_html("<H3>SECURITY POLICIES</H3>")
     vulnerability_def = {
         "Minimum Password Age": local_group_policy,
@@ -962,7 +1298,7 @@ def local_policies(vulnerabilities):
         "Lockout Duration": local_group_policy,
         "Lockout Reset Duration": local_group_policy,
         "Check Kernel": check_kernel,
-        "Disable SSH Root Login": disable_SSH_Root_Login,
+        "Disable SSH Root Login": local_group_policy,
         "Password History": local_group_policy,
         "Audit": local_group_policy,
     }
@@ -982,6 +1318,12 @@ def local_policies(vulnerabilities):
 
 # check1
 def program_management(vulnerabilities):
+    """
+    Manages installed programs based on the provided vulnerabilities and records hits/misses.
+    
+    Args:
+        vulnerabilities (list): A list of vulnerabilities to check.
+    """
     write_to_html("<H3>PROGRAMS</H3>")
     vulnerability_def = {
         "Good Program": programs,
@@ -1007,6 +1349,12 @@ def program_management(vulnerabilities):
 
 
 def file_management(vulnerabilities):
+    """
+    Manages file-related checks based on the provided vulnerabilities and records hits/misses.
+    
+    Args:
+        vulnerabilities (list): A list of vulnerabilities to check.
+    """
     write_to_html("<H3>FILE MANAGEMENT</H3>")
     vulnerability_def = {
         "Forensic": forensic_question,
@@ -1032,6 +1380,12 @@ def file_management(vulnerabilities):
 
 
 def firewall_management(vulnerabilities):
+    """
+    Manages firewall-related checks based on the provided vulnerabilities and records hits/misses.
+    
+    Args:
+        vulnerabilities (list): A list of vulnerabilities to check.
+    """
     write_to_html("<H3>FIREWALL MANAGEMENT</H3>")
     vulnerabilities
     vulnerability_def = {
@@ -1054,6 +1408,12 @@ def firewall_management(vulnerabilities):
 
 
 def critical_functions(vulnerabilities):
+    """
+    Manages critical functions based on the provided vulnerabilities and records hits/misses.
+    
+    Args:
+        vulnerabilities (list): A list of vulnerabilities to check.
+    """
     write_to_html("<H4>Critical Functions:</H4>")
     vulnerability_def = {
         "Critical Users": critical_users,
@@ -1082,7 +1442,7 @@ try:
     Vulnerabilities = db_handler.OptionTables()
     Vulnerabilities.initialize_option_table()
 except:
-    f = open("scoring_engine.log", "w")
+    f = open("scoring_engine.log", "a")
     e = traceback.format_exc()
     f.write(str(e))
     f.close()
@@ -1115,7 +1475,7 @@ while True:
         total_points = 0
         total_vulnerabilities = 0
         critical_items = []
-        policy_settings_content = load_policy_settings()
+        login_policy_settings_content, pamd_policy_settings_content = load_policy_settings() # Split into login_defs_list and pamd_defs_list to handle different data types
         password_settings_content = load_password_settings()
         services_content = load_services()
         program_content = load_programs()

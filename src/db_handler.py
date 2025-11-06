@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+"""
+Database handler for CyberPatriot application. Handles settings, categories, vulnerability templates, 
+and option tables using SQLAlchemy ORM to give configurator configs peristence.
+"""
+
 import sys, os, subprocess
 
 from sqlalchemy import orm
@@ -8,6 +13,7 @@ import sqlalchemy as sa
 
 from tkinter import StringVar, IntVar
 
+# Ensure the config directory exists
 try:
     # PyInstaller creates a temp folder and stores path in _MEIPASS
     base_path = os.path.abspath("/etc/CYBERPATRIOT/")
@@ -26,6 +32,10 @@ session = orm.scoped_session(orm.sessionmaker())(bind=engine)
 
 
 class SettingsModel(base):
+    """
+    SQLAlchemy ORM model for storing application settings.
+    Stores style, desktop path, silent/server mode, server credentials, and scoring tallies.
+    """
     __tablename__ = "Settings"
     id = sa.Column(sa.Integer, primary_key=True)
     style = sa.Column(sa.String(128), nullable=False, default="black")
@@ -45,7 +55,14 @@ class SettingsModel(base):
 
 
 class Settings:
+    """
+    Handles retrieval and updating of application settings using the SettingsModel.
+    Provides methods to get settings as Tkinter variables or plain values, and to update settings.
+    """
     def __init__(self):
+        """
+        Initializes the Settings object, loading from the database or creating a new entry if none exists.
+        """
         if session.query(SettingsModel).scalar() is None:
             self.settings = SettingsModel()
             session.add(self.settings)
@@ -54,6 +71,11 @@ class Settings:
             self.settings = session.query(SettingsModel).one()
 
     def get_settings(self, config=True):
+        """
+        Returns settings as a dictionary.
+        If config=True, returns Tkinter variable wrappers for GUI binding.
+        Otherwise, returns plain values for backend use.
+        """
         if config:
             return {
                 "Style": StringVar(value=self.settings.style),
@@ -81,6 +103,10 @@ class Settings:
             }
 
     def update_table(self, entry):
+        """
+        Updates the settings table in the database with values from the provided entry dictionary.
+        Commits changes to the database.
+        """
         self.settings.style = entry["Style"].get()
         self.settings.desktop = entry["Desktop"].get()
         self.settings.silent_mode = (
@@ -97,11 +123,18 @@ class Settings:
         session.commit()
 
     def update_score(self, entry):
+        """
+        Updates the current score and vulnerability count in the settings table.
+        """
         self.settings.current_points = entry["Current Points"]
         self.settings.current_vuln = entry["Current Vulnerabilities"]
 
 
 class CategoryModels(base):
+    """
+    SQLAlchemy ORM model for vulnerability categories.
+    Stores category name and description.
+    """
     __tablename__ = "Vulnerability Categories"
     id = sa.Column(sa.Integer, primary_key=True)
     name = sa.Column(sa.String(128), nullable=False, unique=True)
@@ -112,6 +145,10 @@ class CategoryModels(base):
 
 
 class Categories:
+    """
+    Handles loading and retrieval of vulnerability categories.
+    Ensures default categories are present in the database and provides access to all categories.
+    """
     categories = {
         "Account Management": "This section is for scoring user policies. The options that will take multiple test points can be setup by clicking the `Modify` button. Once the `Modify` button is clicked that option will automatically be enabled. Make sure the option is enabled and the points are set for the options you want scored.",
         "Local Policy": "This section is for scoring Local Security Policies. Each option has a defined range that they be testing listed in their description. Make sure the option is enabled and the points are set for the options you want scored.",
@@ -121,6 +158,9 @@ class Categories:
     }
 
     def __init__(self):
+        """
+        Initializes Categories, loading existing categories and adding defaults if missing.
+        """
         loaded_categories = []
         for cat in session.query(CategoryModels):
             loaded_categories.append(cat.name)
@@ -133,10 +173,17 @@ class Categories:
         session.commit()
 
     def get_categories(self):
+        """
+        Returns a SQLAlchemy query for all category models.
+        """
         return session.query(CategoryModels)
 
 
 class VulnerabilityTemplateModel(base):
+    """
+    SQLAlchemy ORM model for vulnerability templates.
+    Stores template name, category, definition, description, and checks.
+    """
     __tablename__ = "Vulnerability Template"
     id = sa.Column(sa.Integer, primary_key=True)
     name = sa.Column(sa.String(128), nullable=False, unique=True)
@@ -153,10 +200,18 @@ base.metadata.create_all(engine)
 
 
 class OptionTables:
+    """
+    Manages dynamic option tables for vulnerabilities.
+    Handles creation, retrieval, updating, and deletion of vulnerability options and their checks.
+    """
     models = {}
     checks_list = {}
 
     def __init__(self, vulnerability_templates=None):
+        """
+        Initializes option tables for provided vulnerability templates.
+        Adds new templates to the database if they do not exist.
+        """
         loaded_vulns_templates = []
         for vuln_templates in session.query(VulnerabilityTemplateModel):
             loaded_vulns_templates.append(vuln_templates.name)
@@ -191,6 +246,10 @@ class OptionTables:
         session.commit()
 
     def initialize_option_table(self):
+        """
+        Initializes option tables for all vulnerability templates.
+        Dynamically creates SQLAlchemy models and ensures database entries exist.
+        """
         for vuln_template in session.query(VulnerabilityTemplateModel):
             name = vuln_template.name
             checks_list = (
@@ -217,6 +276,9 @@ class OptionTables:
         session.commit()
 
     def get_option_template(self, vulnerability):
+        """
+        Retrieves a vulnerability template by name.
+        """
         return (
             session.query(VulnerabilityTemplateModel)
             .filter_by(name=vulnerability)
@@ -224,9 +286,16 @@ class OptionTables:
         )
 
     def get_option_template_by_category(self, category):
+        """
+        Retrieves vulnerability templates by category ID.
+        """
         return session.query(VulnerabilityTemplateModel).filter_by(category=category)
 
     def get_option_table(self, vulnerability, config=True):
+        """
+        Retrieves option table entries for a vulnerability.
+        Returns Tkinter variable wrappers if config=True, otherwise plain values.
+        """
         vuln_dict = {}
         for vuln in session.query(self.models[vulnerability]):
             if config:
@@ -272,12 +341,20 @@ class OptionTables:
         return vuln_dict
 
     def add_to_table(self, vulnerability, **kwargs):
+        """
+        Adds a new entry to the option table for the specified vulnerability.
+        Commits the new entry to the database.
+        """
         vuln = self.models[vulnerability](**kwargs)
         session.add(vuln)
         session.commit()
         return vuln
 
     def update_table(self, vulnerability, entry):
+        """
+        Updates entries in the option table for the specified vulnerability using the provided entry dictionary.
+        Commits changes to the database.
+        """
         for vuln in session.query(self.models[vulnerability]):
             vuln_update = {
                 "Enabled": (
@@ -299,15 +376,27 @@ class OptionTables:
             session.commit()
 
     def remove_from_table(self, vulnerability, vuln_id):
+        """
+        Removes an entry from the option table for the specified vulnerability by ID.
+        Commits the deletion to the database.
+        """
         vuln = session.query(self.models[vulnerability]).filter_by(id=vuln_id).one()
         session.delete(vuln)
         session.commit()
 
     def cleanup(self):
+        """
+        Flushes the current session (useful for cleanup operations).
+        """
         session.flush()
 
 
 def create_option_table(name, option_categories, option_models):
+    """
+    Dynamically creates a SQLAlchemy ORM model for a vulnerability option table.
+    Adds columns based on provided option categories and types.
+    Updates the option_models dictionary with the new model.
+    """
     attr_dict = {
         "__tablename__": name,
         "id": sa.Column(sa.Integer, primary_key=True),

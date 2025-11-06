@@ -15,6 +15,18 @@ Contains all files essential to setting up the proper binaries, dependencies, an
 
 *Note: Virtual Environments should be installed for cleaner build and isolation.*
 
+### service_setup.py
+
+- Sets up scoring_engine binary from dist/ as a service via symlink located in: **/usr/local/bin/scoring_engine_DO_NOT_TOUCH**
+- Set the service to run on startup and reload using systemd(systemctl is the cli). Name: **scoring_engine.service**
+- Sets up assets in **/etc/CYBERPATRIOT_DO_NOT_REMOVE**
+- Optionally runs both binaries.
+
+### configurator.py
+
+- Main job is to set and send configurations for the scoring engine to **db_handler** to persist and manage.
+
+
 ## Adding Dependencies
 In order for **build.py** to recognize new dependencies, make sure the new requirements are installable via pip, and add them to **requirements.txt** using format:
     

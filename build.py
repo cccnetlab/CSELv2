@@ -46,6 +46,7 @@ def build_configurator():
         "--name=configurator_DO_NOT_TOUCH",
         "--distpath=dist",
         "--add-data=assets/icons:assets/icons",
+        "--add-data=dist/scoring_engine_DO_NOT_TOUCH:dist",
         "--add-data=src/db_handler.py:src",
         "--add-data=src/admin_test.py:src",
         "src/configurator.py",
@@ -74,6 +75,7 @@ def build_scoring_engine():
         "--distpath=dist",
         "--add-data=src/db_handler.py:src",
         "--add-data=src/admin_test.py:src",
+        "--hidden-import=lsb_release",
         "src/scoring_engine.py",
     ]
 
@@ -93,7 +95,6 @@ def get_linux_distribution():
         str: Linux distribution name in lowercase, or empty string if undetermined.
     """
 
-    import subprocess
     try:
         # Check for lsb_release, else install
         import lsb_release
@@ -306,7 +307,9 @@ def main():
 
     try:
         # Clean previous builds
-        clean_build()
+        response = input("Clean previous builds? (Y/n): ")
+        if response.lower() in ["", "y"]:
+            clean_build()
 
         # Install required packages
         response = input("Run automatic setup and verification of required dependencies? (Recommended if not done before) (y/N): ")
@@ -319,8 +322,19 @@ def main():
             print("Skipping dependency check. Ensure all dependencies are installed...\n")
 
         # Build both binaries
-        result1 = build_configurator()
-        result2 = build_scoring_engine()
+        response = input("Build scoring_engine? (Y/n): ")
+        if response.lower() in ["", "y"]:
+            result2 = build_scoring_engine()
+        else:
+            print("Skipping scoring_engine build.")
+            result2 = 0
+        response = input("Build configurator? (Y/n): ")
+        if response.lower() in ["", "y"]:
+            result1 = build_configurator()
+        else:
+            print("Skipping configurator build.")
+            result1 = 0
+
 
         # # Check and install scoring_engine Cronjob as well as the CYBER directory for assets.
         # ensure_crontab_entry()
@@ -328,42 +342,15 @@ def main():
         # TODO: Create a symbolic link in /usr/local/bin or use systemctl to manage service instead of crontab
         # TODO: Migrate and cotinue consolidating install.sh
 
-        # Launch the binaries
-        try:
-            configurator_bin = "dist/configurator"
-            scoring_engine_bin = "dist/scoring_engine"
-            
-            # Attempt to launch configurator
-            rint("\nLaunching configurator...")
-            current_binary = "configurator"
-            if os.path.exists(configurator_bin):
-                subprocess.run(["sudo", "-E", configurator_bin])
-            else:
-                raise Exception(f"Configurator binary not found at {configurator_bin}")
-            
-            # Attempt to launch scoring_engine
-            print("\nLaunching scoring_engine...")
-            current_binary = "scoring_engine"  
-            if os.path.exists(scoring_engine_bin):
-                # Launch in background using Popen
-                subprocess.Popen(["sudo", "-E", scoring_engine_bin])
-            else:
-                raise Exception(f"Scoring engine binary not found at {scoring_engine_bin}")
-                sys.exit(1)
-
-        except Exception as e:
-            print(f"Failed to launch {current_binary}: {e}")
-
-
         if result1 == 0 and result2 == 0:
             print("\n" + "=" * 60)
-            print("✓ Build and configuration completed successfully!")
+            print("✓ Build and configuration completed/skipped successfully!")
             print("=" * 60)
             print("\nBinaries location:")
             print("/dist")
             print("\nNext steps:")
-            print("  1. Rerun configurator: sudo -E dist/configurator_DO_NOT_TOUCH")
-            print("  2. Rerun scoring engine: sudo -E dist/scoring_engine_DO_NOT_TOUCH &")
+            print("  1. Install scoring engine as service: sudo python3 setup/setup_service.py")
+            print("  2. Run configurator: sudo -E dist/configurator_DO_NOT_TOUCH")
             print("  3. For scoring, only the scoring engine needs to run continuously after the configurator is used to set vulnerabilities.")
         else:
             print("\n✗ Build failed with errors")
@@ -378,4 +365,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    #main() TODO: Re-enable after testing
+    build_configurator()
+
