@@ -316,6 +316,33 @@ class VerticalScrolledFrame(Frame):
         canvas.bind("<Configure>", _configure_canvas)
 
 
+def validate_points_entry(points_var):
+    """
+    Validate and correct a points entry field when focus is lost.
+    If the field is empty or invalid, set it to 0.
+    
+    Args:
+        points_var: Tkinter IntVar or StringVar containing the points value
+        
+    Returns:
+        Function to be used as FocusOut event handler
+    """
+    def on_focus_out(event=None):
+        try:
+            val = points_var.get()
+            # If empty or whitespace, set to 0
+            if not val or not str(val).strip():
+                points_var.set(0)
+            else:
+                # Try to convert to int to validate
+                int(val)
+        except (ValueError, TypeError, TclError):
+            # If conversion fails, set to 0
+            points_var.set(0)
+        return True
+    return on_focus_out
+
+
 # this class declares most of our ui, pulling from the db, it generates a checkbox under the right category
 class Config(Tk):
     """
@@ -531,7 +558,7 @@ class Config(Tk):
             row (int): Row index for grid placement.
             return_frame (tk.Frame): Frame to return to after modification.
         """
-        ttk.Checkbutton(frame, text=name, variable=entry[1]["Enabled"]).grid(
+        ttk.Checkbutton(frame, text=name, variable=entry[1]["Enabled"], command=tally).grid(
             row=row, column=0, stick=W
         )
         ttk.Label(
@@ -544,9 +571,14 @@ class Config(Tk):
                 command=lambda: self.modify_settings(name, entry, return_frame),
             ).grid(row=row, column=2)
         else:
-            Entry(
+            # Add trace to points variable to update tally when changed
+            entry[1]["Points"].trace('w', lambda name, index, mode: tally())
+            points_entry = Entry(
                 frame, width=5, textvariable=entry[1]["Points"], font="Verdana 10"
-            ).grid(row=row, column=2)
+            )
+            points_entry.grid(row=row, column=2)
+            # Bind FocusOut event to validate and auto-correct empty values
+            points_entry.bind("<FocusOut>", validate_points_entry(entry[1]["Points"]))
         ttk.Separator(frame, orient=HORIZONTAL).grid(
             row=row + 1, column=0, columnspan=3, sticky=EW
         )
@@ -567,8 +599,9 @@ class Config(Tk):
         modifyPageList.pack(fill=X)
         modifyPageIn = ttk.Frame(modifyPage)
         modifyPageIn.pack(before=modifyPage.canvas, fill=X)
-        if entry[1]["Enabled"].get() != 1:
-            entry[1]["Enabled"].set(1)
+        # Automatic enabling when modifying settings, disabled for now
+        # if entry[1]["Enabled"].get() != 1:
+        #     entry[1]["Enabled"].set(1)
         ttk.Button(
             modifyPageIn,
             text="Save",
@@ -576,6 +609,7 @@ class Config(Tk):
                 self.pack_slaves()[0].pack_forget(),
                 packing.pack(expand=1, fill="both"),
                 Vulnerabilities.update_table(name, entry),
+                tally(),
             ),
         ).grid(row=0, column=0, sticky=EW)
         ttk.Label(modifyPageIn, text=name + " Modification", font="Verdana 15").grid(
@@ -584,7 +618,7 @@ class Config(Tk):
         ttk.Button(
             modifyPageIn,
             text="Add",
-            command=lambda: (add_row(modifyPageList, entry, name)),
+            command=lambda: (add_row(modifyPageList, entry, name), tally()),
         ).grid(row=1, column=0, sticky=EW)
         ttk.Label(
             modifyPageIn,
@@ -696,9 +730,10 @@ def load_modify_settings(frame, entry, name, idx):
     """
     modifyPageListRow = ttk.Frame(frame)
     modifyPageListRow.pack(fill=X)
-    ttk.Entry(modifyPageListRow, width=10, textvariable=entry[idx]["Points"]).grid(
-        row=0, column=0
-    )
+    points_entry = ttk.Entry(modifyPageListRow, width=10, textvariable=entry[idx]["Points"])
+    points_entry.grid(row=0, column=0)
+    # Bind FocusOut event to validate and auto-correct empty values
+    points_entry.bind("<FocusOut>", validate_points_entry(entry[idx]["Points"]))
     c = 0
     for r, t in enumerate(entry[idx]["Checks"]):
         r += 1
@@ -800,15 +835,19 @@ def add_row(frame, entry, name):
     Returns:
         None
     """
-    idx = Vulnerabilities.add_to_table(name).id
+    idx = Vulnerabilities.add_to_table(name)
     entry.update({idx: Vulnerabilities.get_option_table(name)[idx]})
+    
+    # Add trace to points variable to update tally when changed
+    entry[idx]["Points"].trace('w', lambda name, index, mode: tally())
 
     mod_frame = ttk.Frame(frame)
     mod_frame.pack(fill=X)
 
-    ttk.Entry(mod_frame, width=10, textvariable=entry[idx]["Points"]).grid(
-        row=0, column=0
-    )
+    points_entry = ttk.Entry(mod_frame, width=10, textvariable=entry[idx]["Points"])
+    points_entry.grid(row=0, column=0)
+    # Bind FocusOut event to validate and auto-correct empty values
+    points_entry.bind("<FocusOut>", validate_points_entry(entry[idx]["Points"]))
     c = 0
     for r, t in enumerate(entry[idx]["Checks"]):
         r += 1
@@ -884,6 +923,7 @@ def add_row(frame, entry, name):
         command=lambda: (
             remove_row(entry[idx], idx, mod_frame),
             Vulnerabilities.remove_from_table(name, idx),
+            tally(),
         ),
     ).grid(row=0, column=c, sticky=W)
 
@@ -1067,6 +1107,17 @@ def commit_config():
         int(os.environ["SUDO_UID"]),
     )
 
+    # Restart the scoring engine service to pick up new configuration immediately
+    try:
+        print("Restarting scoring_engine service to apply new configuration...")
+        subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True)
+        print("✓ Scoring engine service restarted successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Could not restart scoring_engine service: {e.stderr.decode() if e.stderr else e}", file=sys.stderr)
+        print("The service may not be running. Configuration is still saved.", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Unexpected error restarting service: {e}", file=sys.stderr)
+
     # TODO: Handled via systemd service instead of cron job
     # cron = CronTab(user=os.environ["USER"])
     # command = output_directory + "scoring_engine"
@@ -1121,6 +1172,24 @@ def save_config():
         root.MenuSettings["Desktop"].set(
             "/home/" + os.environ.get("SUDO_USER") + "/Desktop/"
         )
+    
+    # Validate and fix empty point values before saving
+    for vuln in vuln_settings:
+        for setting_id in vuln_settings[vuln]:
+            if setting_id != 1 or len(vuln_settings[vuln]) == 1:
+                points_var = vuln_settings[vuln][setting_id]["Points"]
+                points_val = points_var.get()
+                # If points is empty or invalid, set it to 0
+                if not points_val or not str(points_val).strip():
+                    points_var.set(0)
+                else:
+                    try:
+                        # Validate it's a valid integer
+                        int(points_val)
+                    except (ValueError, TypeError):
+                        # If not valid, set to 0
+                        points_var.set(0)
+    
     create_forensic()
     tally()
     Settings.update_table(root.MenuSettings)
@@ -1144,17 +1213,23 @@ def tally():
     tally_score = 0
     tally_vuln = 0
     for vuln in vuln_settings:
-        if int(vuln_settings[vuln][1]["Enabled"].get()) == 1:
-            if len(vuln_settings[vuln]) == 1:
-                tally_vuln += 1
-                tally_score += int(vuln_settings[vuln][1]["Points"].get())
-            else:
-                for settings in vuln_settings[vuln]:
-                    if settings != 1:
-                        tally_vuln += 1
-                        tally_score += int(
-                            vuln_settings[vuln][settings]["Points"].get()
-                        )
+        try:
+            if int(vuln_settings[vuln][1]["Enabled"].get()) == 1:
+                if len(vuln_settings[vuln]) == 1:
+                    tally_vuln += 1
+                    # Handle empty or invalid point values by defaulting to 0
+                    points_val = vuln_settings[vuln][1]["Points"].get()
+                    tally_score += int(points_val) if points_val else 0
+                else:
+                    for settings in vuln_settings[vuln]:
+                        if settings != 1:
+                            tally_vuln += 1
+                            # Handle empty or invalid point values by defaulting to 0
+                            points_val = vuln_settings[vuln][settings]["Points"].get()
+                            tally_score += int(points_val) if points_val else 0
+        except (ValueError, TypeError):
+            # Silently skip invalid entries during tally calculation
+            pass
     root.MenuSettings["Tally Points"].set(tally_score)
     root.MenuSettings["Tally Vulnerabilities"].set(tally_vuln)
 
@@ -1212,7 +1287,7 @@ def get_group_list():
 
 def show_error(self, *args):
     """
-    Display an error message in a Tkinter messagebox.
+    Display an error message to the terminal.
 
     Args:
         self: Exception context (Tkinter callback).
@@ -1222,10 +1297,17 @@ def show_error(self, *args):
         None
     """
     err = traceback.format_exception(*args)
-    for i in err:
-        if "expected integer but got" in i:
-            err = "There is an integer error with one of the points"
-    messagebox.showerror("Exception", err)
+    err_str = ''.join(err)
+    
+    # Silently ignore integer conversion errors from empty point fields
+    # These are now handled gracefully in tally() function
+    if "expected integer but got" in err_str or "invalid literal for int()" in err_str:
+        return
+    
+    # Print error to terminal instead of showing popup
+    print("\n=== ERROR ===", file=sys.stderr)
+    print(err_str, file=sys.stderr)
+    print("=============\n", file=sys.stderr)
 
 
 def change_theme(style_array):
@@ -1244,7 +1326,7 @@ def change_theme(style_array):
 #  region theme settings
 def generate_export(extension):
     """
-    Export the current configuration and report to an HTML file.
+    Export the current configuration and report to an HTML file. For testing purposes, does not update ScoreReport.html.
 
     Args:
         extension (str): File extension for export (e.g., ".html").
@@ -1259,6 +1341,10 @@ def generate_export(extension):
         defaultextension=extension,
         filetypes=(("Web Page", "*.html"), ("all files", "*.*")),
     )
+    
+    # If user cancels, saveLocation will be empty string - return early
+    if not saveLocation:
+        return
     head = (
         '<!DOCTYPE html>\n<html>\n\t<head>\n\t\t<meta name="viewport" content="width=device-width, initial-scale=1">\n\t\t<style>\n\t\t\t* {box-sizing: border-box}\n\n\t\t\t.banner {\n\t\t\t\tborder-bottom: 1px solid #959b94;\n\t\t\t\tfont-size: 20px;\n\t\t\t}\n\n\t\t\tspan.true {\n\t\t\t\tbackground:green;\n\t\t\t\tcolor:white;\n\t\t\t}\n\n\t\t\tspan.false {\n\t\t\t\tbackground:red;\n\t\t\t\tcolor:white;\n\t\t\t}\n\n\t\t\t.tab {\n\t\t\t\tfloat: left;\n\t\t\t\tbackground-color: #f1f1f1;\n\t\t\t\twidth: 10%;\n\t\t\t\theight: 100%;\n\t\t\t}\n\n\t\t\t.tab button {\n\t\t\t\tdisplay: block;\n\t\t\t\tbackground-color: inherit;\n\t\t\t\tcolor: black;\n\t\t\t\tpadding: 22px 16px;\n\t\t\t\twidth: 100%;\n\t\t\t\tborder: none;\n\t\t\t\toutline: none;\n\t\t\t\ttext-align: left;\n\t\t\t\tcursor: pointer;\n\t\t\t\ttransition: 0.3s;\n\t\t\t\tfont-size: 25px;\n\t\t\t}\n\n\t\t\t.tab button:hover {\n\t\t\t\tbackground-color: #ddd;\n\t\t\t}\n\n\t\t\t.tab button.active {\n\t\t\t\tbackground-color: #ccc;\n\t\t\t}\n\n\t\t\t.tabcontent {\n\t\t\t\tfloat: left;\n\t\t\t\tpadding: 0px 12px;\n\t\t\t\twidth: 70%;\n\t\t\t\tborder-left: none;\n\t\t\t\theight: 300px;\n\t\t\t}\n\n\t\t\ttable.content {\n\t\t\t\twidth: 100%;\n\t\t\t\tborder-collapse: collapse;\n\t\t\t}\n\n\t\t\ttr.head {\n\t\t\t\tfont-weight: bold;\n\t\t\t\tfont-size: 25px;\n\t\t\t}\n\n\t\t\ttr.label {\n\t\t\t\tborder: 1px solid black;\n\t\t\t\tfont-weight: bold;\n\t\t\t\tfont-size: 22px;\n\t\t\t}\n\n\t\t\ttd {\n\t\t\t\tborder: 1px solid black;\n\t\t\t}\n\n\t\t\ttd.banner {\n\t\t\t\tborder: none;\n\t\t\t\t}\n\t\t</style>\n\t</head>\n\t<body>\n\t\t<div class="banner">\n\t\t\t<table width="100%">\n\t\t\t\t<tr>\n\t\t\t\t\t<td class="banner" colspan="3">Save Location: '
         + root.MenuSettings["Desktop"].get()

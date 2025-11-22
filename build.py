@@ -365,6 +365,4 @@ def main():
 
 
 if __name__ == "__main__":
-    #main() TODO: Re-enable after testing
-    build_configurator()
-
+    main() 

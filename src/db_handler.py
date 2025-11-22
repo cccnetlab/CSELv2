@@ -26,9 +26,23 @@ except Exception:
 db = os.path.join(base_path, "save_data.db")
 
 base = declarative_base()
-engine = sa.create_engine("sqlite:///" + db)
+engine = sa.create_engine("sqlite:///" + db, 
+                         pool_timeout=20, 
+                         pool_recycle=-1,
+                         connect_args={'timeout': 20})
 base.metadata.bind = engine
-session = orm.scoped_session(orm.sessionmaker())(bind=engine)
+Session = orm.scoped_session(orm.sessionmaker(bind=engine))
+
+def get_session():
+    """Get a new database session"""
+    return Session()
+
+def close_session(session):
+    """Properly close a database session"""
+    try:
+        session.close()
+    except Exception:
+        pass
 
 
 class SettingsModel(base):
@@ -63,12 +77,17 @@ class Settings:
         """
         Initializes the Settings object, loading from the database or creating a new entry if none exists.
         """
-        if session.query(SettingsModel).scalar() is None:
-            self.settings = SettingsModel()
-            session.add(self.settings)
-            session.commit()
-        else:
-            self.settings = session.query(SettingsModel).one()
+        session = get_session()
+        try:
+            base.metadata.create_all(engine)
+            if session.query(SettingsModel).scalar() is None:
+                self.settings = SettingsModel()
+                session.add(self.settings)
+                session.commit()
+            else:
+                self.settings = session.query(SettingsModel).one()
+        finally:
+            close_session(session)
 
     def get_settings(self, config=True):
         """
@@ -107,27 +126,60 @@ class Settings:
         Updates the settings table in the database with values from the provided entry dictionary.
         Commits changes to the database.
         """
-        self.settings.style = entry["Style"].get()
-        self.settings.desktop = entry["Desktop"].get()
-        self.settings.silent_mode = (
-            True if int(entry["Silent Mode"].get()) == 1 else False
-        )
-        self.settings.server_mode = (
-            True if int(entry["Server Mode"].get()) == 1 else False
-        )
-        self.settings.server_name = entry["Server Name"].get()
-        self.settings.server_user = entry["Server User"].get()
-        self.settings.server_pass = entry["Server Password"].get()
-        self.settings.tally_points = entry["Tally Points"].get()
-        self.settings.tally_vuln = entry["Tally Vulnerabilities"].get()
-        session.commit()
+        session = get_session()
+        try:
+            # Query the settings record within the current session
+            settings = session.query(SettingsModel).first()
+            if settings:
+                # Update all fields
+                settings.style = entry["Style"].get()
+                settings.desktop = entry["Desktop"].get()
+                settings.silent_mode = (
+                    True if int(entry["Silent Mode"].get()) == 1 else False
+                )
+                settings.server_mode = (
+                    True if int(entry["Server Mode"].get()) == 1 else False
+                )
+                settings.server_name = entry["Server Name"].get()
+                settings.server_user = entry["Server User"].get()
+                settings.server_pass = entry["Server Password"].get()
+                settings.tally_points = entry["Tally Points"].get()
+                settings.tally_vuln = entry["Tally Vulnerabilities"].get()
+                
+                # Commit the changes
+                session.commit()
+                
+                # Update the in-memory object to reflect the changes
+                self.settings.style = settings.style
+                self.settings.desktop = settings.desktop
+                self.settings.silent_mode = settings.silent_mode
+                self.settings.server_mode = settings.server_mode
+                self.settings.server_name = settings.server_name
+                self.settings.server_user = settings.server_user
+                self.settings.server_pass = settings.server_pass
+                self.settings.tally_points = settings.tally_points
+                self.settings.tally_vuln = settings.tally_vuln
+        finally:
+            close_session(session)
 
     def update_score(self, entry):
         """
         Updates the current score and vulnerability count in the settings table.
         """
-        self.settings.current_points = entry["Current Points"]
-        self.settings.current_vuln = entry["Current Vulnerabilities"]
+        session = get_session()
+        try:
+            # Query the settings record within the current session
+            settings = session.query(SettingsModel).first()
+            if settings:
+                settings.current_points = entry["Current Points"]
+                settings.current_vuln = entry["Current Vulnerabilities"]
+                session.commit()
+                
+                # Update in-memory object
+                self.settings.current_points = settings.current_points
+                self.settings.current_vuln = settings.current_vuln
+        finally:
+            close_session(session)
 
 
 class CategoryModels(base):
@@ -161,22 +213,30 @@ class Categories:
         """
         Initializes Categories, loading existing categories and adding defaults if missing.
         """
-        loaded_categories = []
-        for cat in session.query(CategoryModels):
-            loaded_categories.append(cat.name)
-        for cat in self.categories:
-            if cat not in loaded_categories:
-                name = cat
-                description = self.categories[cat]
-                category = CategoryModels(name=name, description=description)
-                session.add(category)
-        session.commit()
+        session = get_session()
+        try:
+            loaded_categories = []
+            for cat in session.query(CategoryModels):
+                loaded_categories.append(cat.name)
+            for cat in self.categories:
+                if cat not in loaded_categories:
+                    name = cat
+                    description = self.categories[cat]
+                    category = CategoryModels(name=name, description=description)
+                    session.add(category)
+            session.commit()
+        finally:
+            close_session(session)
 
     def get_categories(self):
         """
         Returns a SQLAlchemy query for all category models.
         """
-        return session.query(CategoryModels)
+        session = get_session()
+        try:
+            return session.query(CategoryModels).all()
+        finally:
+            close_session(session)
 
 
 class VulnerabilityTemplateModel(base):
@@ -212,183 +272,221 @@ class OptionTables:
         Initializes option tables for provided vulnerability templates.
         Adds new templates to the database if they do not exist.
         """
-        loaded_vulns_templates = []
-        for vuln_templates in session.query(VulnerabilityTemplateModel):
-            loaded_vulns_templates.append(vuln_templates.name)
-        if vulnerability_templates != None:
-            for name in vulnerability_templates:
-                if name not in loaded_vulns_templates:
-                    category = (
-                        session.query(CategoryModels)
-                        .filter_by(name=vulnerability_templates[name]["Category"])
-                        .one()
-                        .id
-                    )
-                    definition = vulnerability_templates[name]["Definition"]
-                    description = (
-                        vulnerability_templates[name]["Description"]
-                        if "Description" in vulnerability_templates[name]
-                        else None
-                    )
-                    checks = (
-                        vulnerability_templates[name]["Checks"]
-                        if "Checks" in vulnerability_templates[name]
-                        else None
-                    )
-                    vuln_template = VulnerabilityTemplateModel(
-                        name=name,
-                        category=category,
-                        definition=definition,
-                        description=description,
-                        checks=checks,
-                    )
-                    session.add(vuln_template)
-        session.commit()
+        session = get_session()
+        try:
+            loaded_vulns_templates = []
+            for vuln_templates in session.query(VulnerabilityTemplateModel):
+                loaded_vulns_templates.append(vuln_templates.name)
+            if vulnerability_templates != None:
+                for name in vulnerability_templates:
+                    if name not in loaded_vulns_templates:
+                        category = (
+                            session.query(CategoryModels)
+                            .filter_by(name=vulnerability_templates[name]["Category"])
+                            .one()
+                            .id
+                        )
+                        definition = vulnerability_templates[name]["Definition"]
+                        description = (
+                            vulnerability_templates[name]["Description"]
+                            if "Description" in vulnerability_templates[name]
+                            else None
+                        )
+                        checks = (
+                            vulnerability_templates[name]["Checks"]
+                            if "Checks" in vulnerability_templates[name]
+                            else None
+                        )
+                        vuln_template = VulnerabilityTemplateModel(
+                            name=name,
+                            category=category,
+                            definition=definition,
+                            description=description,
+                            checks=checks,
+                        )
+                        session.add(vuln_template)
+            session.commit()
+        finally:
+            close_session(session)
 
     def initialize_option_table(self):
         """
         Initializes option tables for all vulnerability templates.
         Dynamically creates SQLAlchemy models and ensures database entries exist.
         """
-        for vuln_template in session.query(VulnerabilityTemplateModel):
-            name = vuln_template.name
-            checks_list = (
-                vuln_template.checks.split(",")
-                if vuln_template.checks is not None
-                else []
-            )
-            checks_dict = {}
-            self.checks_list.update({name: {}})
-            for checks in checks_list:
-                chk = checks.split(":")
-                checks_dict.update({chk[0]: chk[1]})
-                self.checks_list[name].update({chk[0]: chk[0]})
-            create_option_table(name, checks_dict, self.models)
-        base.metadata.create_all(engine)
+        session = get_session()
+        try:
+            for vuln_template in session.query(VulnerabilityTemplateModel):
+                name = vuln_template.name
+                checks_list = (
+                    vuln_template.checks.split(",")
+                    if vuln_template.checks is not None
+                    else []
+                )
+                checks_dict = {}
+                self.checks_list.update({name: {}})
+                for checks in checks_list:
+                    chk = checks.split(":")
+                    checks_dict.update({chk[0]: chk[1]})
+                    self.checks_list[name].update({chk[0]: chk[0]})
+                create_option_table(name, checks_dict, self.models)
+            base.metadata.create_all(engine)
 
-        for name in self.models:
-            try:
-                if session.query(self.models[name]).scalar() is None:
-                    vuln_base = self.models[name]()
-                    session.add(vuln_base)
-            except:
-                pass
-        session.commit()
+            for name in self.models:
+                try:
+                    if session.query(self.models[name]).scalar() is None:
+                        vuln_base = self.models[name]()
+                        session.add(vuln_base)
+                except:
+                    pass
+            session.commit()
+        finally:
+            close_session(session)
 
     def get_option_template(self, vulnerability):
         """
         Retrieves a vulnerability template by name.
         """
-        return (
-            session.query(VulnerabilityTemplateModel)
-            .filter_by(name=vulnerability)
-            .one()
-        )
+        session = get_session()
+        try:
+            return (
+                session.query(VulnerabilityTemplateModel)
+                .filter_by(name=vulnerability)
+                .one()
+            )
+        finally:
+            close_session(session)
 
     def get_option_template_by_category(self, category):
         """
         Retrieves vulnerability templates by category ID.
         """
-        return session.query(VulnerabilityTemplateModel).filter_by(category=category)
+        session = get_session()
+        try:
+            return session.query(VulnerabilityTemplateModel).filter_by(category=category).all()
+        finally:
+            close_session(session)
 
     def get_option_table(self, vulnerability, config=True):
         """
         Retrieves option table entries for a vulnerability.
         Returns Tkinter variable wrappers if config=True, otherwise plain values.
         """
-        vuln_dict = {}
-        for vuln in session.query(self.models[vulnerability]):
-            if config:
-                vuln_dict.update(
-                    {
-                        vuln.id: {
-                            "Enabled": IntVar(value=vuln.Enabled),
-                            "Points": IntVar(value=vuln.Points),
-                            "Checks": {},
+        session = get_session()
+        try:
+            vuln_dict = {}
+            for vuln in session.query(self.models[vulnerability]):
+                if config:
+                    vuln_dict.update(
+                        {
+                            vuln.id: {
+                                "Enabled": IntVar(value=vuln.Enabled),
+                                "Points": IntVar(value=vuln.Points),
+                                "Checks": {},
+                            }
                         }
-                    }
-                )
-                for checks in vars(vuln):
-                    if (
-                        not checks.startswith("_")
-                        and checks != "id"
-                        and checks != "Enabled"
-                        and checks != "Points"
-                    ):
+                    )
+                    for checks in vars(vuln):
                         if (
-                            type(vars(vuln)[checks]) == int
-                            or type(vars(vuln)[checks]) == bool
+                            not checks.startswith("_")
+                            and checks != "id"
+                            and checks != "Enabled"
+                            and checks != "Points"
                         ):
-                            vuln_dict[vuln.id]["Checks"].update(
-                                {checks: IntVar(value=vars(vuln)[checks])}
-                            )
-                        else:
-                            vuln_dict[vuln.id]["Checks"].update(
-                                {checks: StringVar(value=vars(vuln)[checks])}
-                            )
-            else:
-                vuln_dict.update(
-                    {vuln.id: {"Enabled": vuln.Enabled, "Points": vuln.Points}}
-                )
-                for checks in vars(vuln):
-                    if (
-                        not checks.startswith("_")
-                        and checks != "id"
-                        and checks != "Enabled"
-                        and checks != "Points"
-                    ):
-                        vuln_dict[vuln.id].update({checks: vars(vuln)[checks]})
-        return vuln_dict
+                            if (
+                                type(vars(vuln)[checks]) == int
+                                or type(vars(vuln)[checks]) == bool
+                            ):
+                                vuln_dict[vuln.id]["Checks"].update(
+                                    {checks: IntVar(value=vars(vuln)[checks])}
+                                )
+                            else:
+                                vuln_dict[vuln.id]["Checks"].update(
+                                    {checks: StringVar(value=vars(vuln)[checks])}
+                                )
+                else:
+                    vuln_dict.update(
+                        {vuln.id: {"Enabled": vuln.Enabled, "Points": vuln.Points}}
+                    )
+                    for checks in vars(vuln):
+                        if (
+                            not checks.startswith("_")
+                            and checks != "id"
+                            and checks != "Enabled"
+                            and checks != "Points"
+                        ):
+                            vuln_dict[vuln.id].update({checks: vars(vuln)[checks]})
+            return vuln_dict
+        finally:
+            close_session(session)
 
     def add_to_table(self, vulnerability, **kwargs):
         """
         Adds a new entry to the option table for the specified vulnerability.
         Commits the new entry to the database.
+        Returns the ID of the new entry.
         """
-        vuln = self.models[vulnerability](**kwargs)
-        session.add(vuln)
-        session.commit()
-        return vuln
+        session = get_session()
+        try:
+            vuln = self.models[vulnerability](**kwargs)
+            session.add(vuln)
+            session.commit()
+            # Return the ID instead of the object to avoid DetachedInstanceError
+            return vuln.id
+        finally:
+            close_session(session)
 
     def update_table(self, vulnerability, entry):
         """
         Updates entries in the option table for the specified vulnerability using the provided entry dictionary.
         Commits changes to the database.
         """
-        for vuln in session.query(self.models[vulnerability]):
-            vuln_update = {
-                "Enabled": (
-                    True if int(entry[vuln.id]["Enabled"].get()) == 1 else False
-                ),
-                "Points": entry[vuln.id]["Points"].get(),
-            }
-            for checks in vars(vuln):
-                if (
-                    not checks.startswith("_")
-                    and checks != "id"
-                    and checks != "Enabled"
-                    and checks != "Points"
-                ):
-                    vuln_update.update({checks: entry[vuln.id]["Checks"][checks].get()})
-            session.query(self.models[vulnerability]).filter_by(id=vuln.id).update(
-                vuln_update
-            )
-            session.commit()
+        session = get_session()
+        try:
+            for vuln in session.query(self.models[vulnerability]):
+                vuln_update = {
+                    "Enabled": (
+                        True if int(entry[vuln.id]["Enabled"].get()) == 1 else False
+                    ),
+                    "Points": entry[vuln.id]["Points"].get(),
+                }
+                for checks in vars(vuln):
+                    if (
+                        not checks.startswith("_")
+                        and checks != "id"
+                        and checks != "Enabled"
+                        and checks != "Points"
+                    ):
+                        vuln_update.update({checks: entry[vuln.id]["Checks"][checks].get()})
+                session.query(self.models[vulnerability]).filter_by(id=vuln.id).update(
+                    vuln_update
+                )
+                session.commit()
+        finally:
+            close_session(session)
 
     def remove_from_table(self, vulnerability, vuln_id):
         """
         Removes an entry from the option table for the specified vulnerability by ID.
         Commits the deletion to the database.
         """
-        vuln = session.query(self.models[vulnerability]).filter_by(id=vuln_id).one()
-        session.delete(vuln)
-        session.commit()
+        session = get_session()
+        try:
+            vuln = session.query(self.models[vulnerability]).filter_by(id=vuln_id).one()
+            session.delete(vuln)
+            session.commit()
+        finally:
+            close_session(session)
 
     def cleanup(self):
         """
         Flushes the current session (useful for cleanup operations).
         """
-        session.flush()
+        session = get_session()
+        try:
+            session.flush()
+        finally:
+            close_session(session)
 
 
 def create_option_table(name, option_categories, option_models):

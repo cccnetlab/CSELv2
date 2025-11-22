@@ -93,7 +93,7 @@ def record_penalty(name, points):
     total_points -= int(points)
 
 
-def display_html_sh(path):
+def display_html_sh(path):  
     """
     Creates a .desktop file for the scoring report on the user's desktop.
     
@@ -126,6 +126,53 @@ def draw_tail():
     os.chown(scoreIndex, int(os.environ["SUDO_UID"]), int(os.environ["SUDO_UID"]))
     # shutil.copy('/var/www/CYBERPATRIOT/ScoreReport.html', '/home/'+ os.environ['SUDO_USER'] + '/Desktop/')
     # os.chown ( '/home/'+ os.environ['SUDO_USER'] + '/Desktop/ScoreReport.html', int(os.environ['SUDO_UID']), int(os.environ['SUDO_UID']))
+    display_html_sh("/home/" + os.environ["SUDO_USER"] + "/Desktop/")
+    os.chown(
+        "/home/" + os.environ["SUDO_USER"] + "/Desktop/ScoringReport.desktop",
+        int(os.environ["SUDO_UID"]),
+        int(os.environ["SUDO_UID"]),
+    )
+    os.chmod(
+        "/home/" + os.environ["SUDO_USER"] + "/Desktop/ScoringReport.desktop", 0o770
+    )
+
+
+def initialize_score_report():
+    """
+    Creates/resets the ScoreReport.html with initial state (0 points/0 vulnerabilities).
+    Called when configurator commits to show updated totals immediately.
+    This creates a fresh HTML file that will be populated by the scoring engine.
+    """
+    # Get the latest settings from database
+    settings_obj = db_handler.Settings()
+    current_settings = settings_obj.get_settings(False)
+    
+    # Create the score report file path
+    score_index_path = "/var/www/CYBERPATRIOT/ScoreReport.html"
+    
+    # Create the HTML file with updated totals
+    with open(score_index_path, "w+") as file:
+        file.write(
+            '<!doctype html><html><head><title>CSEL Score Report</title><meta http-equiv="refresh" content="60"></head><body style="background-color:powderblue;">'
+            "\n"
+        )
+        file.write(
+            '<table align="center" cellpadding="10"><tr><td><img src="file:///var/www/CYBERPATRIOT/CCC_logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="file:///var/www/CYBERPATRIOT/SoCalCCCC.png"></td></tr></table><br><H2>Your Score: 0/'
+            + str(current_settings["Tally Points"])
+            + "</H2><H2>Vulnerabilities: 0/"
+            + str(current_settings["Tally Vulnerabilities"])
+            + "</H2><hr>"
+        )
+        file.write(
+            '<p style="color:blue;">Configuration updated. Scoring engine will begin checking vulnerabilities shortly...</p>'
+        )
+        file.write('<hr><div align="center"><b>Coastline College</b></div></body></html>')
+    
+    # Set proper permissions and ownership
+    os.chmod(score_index_path, 0o777)
+    os.chown(score_index_path, int(os.environ["SUDO_UID"]), int(os.environ["SUDO_UID"]))
+    
+    # Ensure desktop icon exists
     display_html_sh("/home/" + os.environ["SUDO_USER"] + "/Desktop/")
     os.chown(
         "/home/" + os.environ["SUDO_USER"] + "/Desktop/ScoringReport.desktop",
@@ -477,8 +524,12 @@ def local_group_policy(vulnerability, name):
     # Parse PAM data to extract module settings
     pam_settings_dict = {}
     for pam_line in pamd_policy_settings_content:
-        # Split by tabs and spaces to get components
-        parts = pam_line.split()
+        # Replace literal \t with actual tabs, then split by tabs and whitespace
+        normalized_line = pam_line.replace('\\t', '\t')
+        # Split by both tabs and multiple spaces to handle different formatting
+        parts = re.split(r'[\t\s]+', normalized_line.strip())
+        parts = [p for p in parts if p]  # Remove empty strings
+        
         if len(parts) >= 3:
             module_type = parts[0]  # e.g., "password"
             control = parts[1]      # e.g., "[success=1 default=ignore]"
@@ -494,25 +545,26 @@ def local_group_policy(vulnerability, name):
                         remember_match = re.search(r'remember=(\d+)', options)
                         if remember_match:
                             pam_settings_dict['remember'] = remember_match.group(1)
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"Error parsing remember: {e}")
                         
                 if 'unlock_time=' in options:
                     try:
                         unlock_match = re.search(r'unlock_time=(\d+)', options)
                         if unlock_match:
                             pam_settings_dict['unlock_time'] = unlock_match.group(1)
-                    except:
-                        pass
+                            print(f"DEBUG: Found unlock_time setting: {unlock_match.group(1)}")
+                    except Exception as e:
+                        print(f"DEBUG: Error parsing unlock_time: {e}")
                         
                 if 'deny=' in options:
                     try:
                         deny_match = re.search(r'deny=(\d+)', options)
                         if deny_match:
                             pam_settings_dict['deny'] = deny_match.group(1)
-                    except:
-                        pass
-    print(pam_settings_dict)
+                            print(f"DEBUG: Found deny setting: {deny_match.group(1)}")
+                    except Exception as e:
+                        print(f"DEBUG: Error parsing deny: {e}")
     
     # Attempts to match the policy name and check its, then records hits/misses
     try:
@@ -1472,6 +1524,9 @@ scoreIndex = index + "/ScoreReport.html"
 check_runas()
 while True:
     try:
+        # Reload settings from database each iteration to catch configuration updates
+        menuSettings = Settings.get_settings(False)
+        
         total_points = 0
         total_vulnerabilities = 0
         critical_items = []
