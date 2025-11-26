@@ -342,7 +342,6 @@ def forensic_question(vulnerability):
                         record_miss("Forensic Question")
 
 
-# fixed
 def critical_users(vulnerability):
     """
     Checks for critical users and records penalties if they are removed.
@@ -353,10 +352,10 @@ def critical_users(vulnerability):
     users = pwd.getpwall()
     user_list = []
     for user in users:
-        user_list.append(user.Name)[0]
+        user_list.append(user.pw_name)
     for vuln in vulnerability:
         if vuln != 1:
-            if vulnerability[1]["User Name"] not in user_list:
+            if vulnerability[vuln]["User Name"] not in user_list:
                 record_penalty(
                     vulnerability[vuln]["User Name"] + " was removed.",
                     vulnerability[vuln]["Points"],
@@ -1522,6 +1521,7 @@ scoreIndex = index + "/ScoreReport.html"
 
 # --------- Main Loop ---------#
 check_runas()
+iterations = 0
 while True:
     try:
         # Reload settings from database each iteration to catch configuration updates
@@ -1535,7 +1535,8 @@ while True:
         services_content = load_services()
         program_content = load_programs()
         program_versions = load_versions()
-        time.sleep(20)
+        print("Scoring Engine loop 1st:" + str(iterations))
+        time.sleep(15)
         draw_head()
         for category in categories:
             category_def[category.name](
@@ -1544,7 +1545,8 @@ while True:
         critical_functions(critical_items)
         draw_tail()
         check_score()
-        time.sleep(30)
+        print("Scoring Engine loop 2nd:" + str(iterations))
+        time.sleep(15)
     except:
         f = open("scoring_engine.log", "w")
         e = traceback.format_exc()

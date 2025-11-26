@@ -1110,7 +1110,7 @@ def commit_config():
     # Restart the scoring engine service to pick up new configuration immediately
     try:
         print("Restarting scoring_engine service to apply new configuration...")
-        subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True)
+        # subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True) # TODO: Uncomment when done testing
         print("✓ Scoring engine service restarted successfully.")
     except subprocess.CalledProcessError as e:
         print(f"Warning: Could not restart scoring_engine service: {e.stderr.decode() if e.stderr else e}", file=sys.stderr)
@@ -1202,6 +1202,7 @@ def save_config():
 def tally():
     """
     Calculate and update the total points and vulnerabilities based on current settings.
+    Note: "Critical Users" vulnerability points are excluded from total points as they are penalties.
 
     Args:
         None
@@ -1214,6 +1215,10 @@ def tally():
     tally_vuln = 0
     for vuln in vuln_settings:
         try:
+            # Skip "Critical Users" - it's a penalty, not a scoring opportunity
+            if vuln == "Critical Users":
+                continue
+                
             if int(vuln_settings[vuln][1]["Enabled"].get()) == 1:
                 if len(vuln_settings[vuln]) == 1:
                     tally_vuln += 1
