@@ -19,5 +19,5 @@ pyinstaller>=6.0.0
 # Note: The following must be installed via system package manager(Attempted in build.py):
 # - python3-tk (for tkinter GUI support)
 # - lsb-release >=0.1.0 (system package for Linux distribution detection)
-#
+# - libpwquality-tools (for password strength testing): run 'sudo apt-get install libpwquality-tools'
 # Ubuntu/Debian: sudo apt-get install python3-tk lsb-release

@@ -111,31 +111,45 @@ vulnerability_template = {
         "Category": "Firewall Management",
     },
     "Minimum Password Age": {
-        "Definition": "Enable this to score the competitor for setting the minimum password age to 30, 45, or 60.",
+        "Definition": "Enable this to score the competitor for setting the minimum password age to a specific value (days).",
+        "Description": "Set the minimum password age (in days) that students must configure. The scoring engine will check if the system's minimum password age matches your specified value.",
+        "Checks": "Value:Int",
         "Category": "Local Policy",
     },
     "Maximum Password Age": {
-        "Definition": "Enable this to score the competitor for setting the maximum password age to 60, 75, or 90.",
+        "Definition": "Enable this to score the competitor for setting the maximum password age to a specific value (days).",
+        "Description": "Set the maximum password age (in days) that students must configure. The scoring engine will check if the system's maximum password age matches your specified value.",
+        "Checks": "Value:Int",
         "Category": "Local Policy",
     },
     "Minimum Password Length": {
-        "Definition": "Enable this to score the competitor for setting the minimum password length between 10 and 20.",
+        "Definition": "Enable this to score the competitor for setting the minimum password length to a specific value (characters).",
+        "Description": "Set the minimum password length that students must configure. The scoring engine will check if the system's minimum password length matches your specified value.",
+        "Checks": "Value:Int",
         "Category": "Local Policy",
     },
     "Maximum Login Tries": {
-        "Definition": "Enable this to score the competitor for setting the maximum login tries between 5 and 10.",
+        "Definition": "Enable this to score the competitor for setting the maximum login tries to a specific value (attempts).",
+        "Description": "Set the maximum login attempts (account lockout threshold) that students must configure. The scoring engine will check if the system's lockout threshold matches your specified value.",
+        "Checks": "Value:Int",
         "Category": "Local Policy",
     },
     "Lockout Duration": {
-        "Definition": "Enable this to score the competitor for setting the lockout duration to 30.",
+        "Definition": "Enable this to score the competitor for setting the lockout duration to a specific value (seconds).",
+        "Description": "Set the lockout duration (in seconds) that students must configure. The scoring engine will check if the system's lockout timeout matches your specified value.",
+        "Checks": "Value:Int",
         "Category": "Local Policy",
     },
     "Lockout Reset Duration": {
-        "Definition": "Enable this to score the competitor for setting the lockout reset duration to 30.",
+        "Definition": "Enable this to score the competitor for setting the lockout reset duration to a specific value (seconds).",
+        "Description": "Set the lockout reset duration (in seconds) that students must configure. The scoring engine will check if the system's account lockout reset time matches your specified value.",
+        "Checks": "Value:Int",
         "Category": "Local Policy",
     },
     "Password History": {
-        "Definition": "Enable this to score the competitor for setting the password history between 5 and 10.",
+        "Definition": "Enable this to score the competitor for setting the password history to a specific value (passwords).",
+        "Description": "Set the password history size that students must configure. The scoring engine will check if the system remembers at least this many previous passwords.",
+        "Checks": "Value:Int",
         "Category": "Local Policy",
     },
     # "Password Complexity": {"Definition": 'Enable this to score the competitor for enabling password complexity.',
@@ -490,19 +504,31 @@ class Config(Tk):
             pageList.grid_columnconfigure(1, weight=1)
             pageIn = ttk.Frame(page)
             pageIn.pack(before=page.canvas, fill=X)
+            
+            # Always stretch column 1 (the definition/description column)
             pageIn.grid_columnconfigure(1, weight=1)
+            
+            # Adjust columnspan based on whether we show Value column
+            desc_colspan = 4 if category.name == "Local Policy" else 3
+            
             ttk.Label(pageIn, text=category.description, padding="10 5").grid(
-                row=0, column=0, columnspan=3
-            )
-            ttk.Label(pageIn, text=category.description, padding="10 5").grid(
-                row=0, column=0, columnspan=3
+                row=0, column=0, columnspan=desc_colspan, sticky=W
             )
             ttk.Label(pageIn, text="Vulnerabilities", font="Verdana 12 bold").grid(
-                row=1, column=0, stick=W
+                row=1, column=0, sticky=W
             )
-            ttk.Label(pageIn, text="Points", font="Verdana 12 bold").grid(
-                row=1, column=2
-            )
+            # For Local Policy, add "Value" and "Points" labels in columns 2 and 3
+            if category.name == "Local Policy":
+                ttk.Label(pageIn, text="Value", font="Verdana 12 bold").grid(
+                    row=1, column=2, sticky=E, padx=5
+                )
+                ttk.Label(pageIn, text="Points", font="Verdana 12 bold").grid(
+                    row=1, column=3, sticky=E, padx=5
+                )
+            else:
+                ttk.Label(pageIn, text="Points", font="Verdana 12 bold").grid(
+                    row=1, column=2, sticky=E
+                )
             for i, vuln in enumerate(
                 Vulnerabilities.get_option_template_by_category(category.id)
             ):
@@ -564,23 +590,48 @@ class Config(Tk):
         ttk.Label(
             frame, text=Vulnerabilities.get_option_template(name).definition
         ).grid(row=row, column=1, stick=W)
-        if len(entry[1]["Checks"]) > 0:
+        
+        # Check if this vulnerability has only a "Value" check (password policies)
+        has_only_value_check = (len(entry[1]["Checks"]) == 1 and "Value" in entry[1]["Checks"])
+        
+        if has_only_value_check:
+            # Place Value entry in column 2 and Points entry in column 3 to align with headers
+            # Value entry
+            value_entry = ttk.Entry(
+                frame, width=5, textvariable=entry[1]["Checks"]["Value"], font="Verdana 10"
+            )
+            value_entry.grid(row=row, column=2, padx=5, sticky=E)
+            value_entry.bind("<FocusOut>", validate_points_entry(entry[1]["Checks"]["Value"]))
+            entry[1]["Checks"]["Value"].trace('w', lambda name, index, mode: tally())
+            
+            # Points entry
+            points_entry = ttk.Entry(
+                frame, width=5, textvariable=entry[1]["Points"], font="Verdana 10"
+            )
+            points_entry.grid(row=row, column=3, padx=5, sticky=E)
+            points_entry.bind("<FocusOut>", validate_points_entry(entry[1]["Points"]))
+            entry[1]["Points"].trace('w', lambda name, index, mode: tally())
+            
+        elif len(entry[1]["Checks"]) > 0:
             ttk.Button(
                 frame,
                 text="Modify",
                 command=lambda: self.modify_settings(name, entry, return_frame),
-            ).grid(row=row, column=2)
+            ).grid(row=row, column=3, padx=5, sticky=E)
         else:
             # Add trace to points variable to update tally when changed
             entry[1]["Points"].trace('w', lambda name, index, mode: tally())
-            points_entry = Entry(
+            points_entry = ttk.Entry(
                 frame, width=5, textvariable=entry[1]["Points"], font="Verdana 10"
             )
-            points_entry.grid(row=row, column=2)
+            # Place in column 3 to align with password policy entries, with same padding
+            points_entry.grid(row=row, column=3, padx=5, sticky=E)
             # Bind FocusOut event to validate and auto-correct empty values
             points_entry.bind("<FocusOut>", validate_points_entry(entry[1]["Points"]))
+        
+        # Separator always spans 4 columns for consistency
         ttk.Separator(frame, orient=HORIZONTAL).grid(
-            row=row + 1, column=0, columnspan=3, sticky=EW
+            row=row + 1, column=0, columnspan=4, sticky=EW
         )
 
     def modify_settings(self, name, entry, packing):
@@ -1010,7 +1061,6 @@ def create_forensic():
                 )
                 g.close()
 
-# TODO: See if changing this has any effect
 def resource_path(relative_path):
     """
     Get absolute path to resource, works for dev and for PyInstaller.
@@ -1066,7 +1116,7 @@ def commit_config():
         os.makedirs(output_directory)
     if not os.path.exists(web_directory):
         os.makedirs(web_directory)
-    # TODO: Check if still redundant due to service_setup.py
+    # TODO(later): Check if still redundant due to service_setup.py
     # print(find_absolute_path("scoring_engine_DO_NOT_TOUCH"))
     # shutil.copy(
     #     find_absolute_path("scoring_engine_DO_NOT_TOUCH"),
@@ -1110,49 +1160,13 @@ def commit_config():
     # Restart the scoring engine service to pick up new configuration immediately
     try:
         print("Restarting scoring_engine service to apply new configuration...")
-        # subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True) # TODO: Uncomment when done testing
+        # subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True) # TODO(later): Uncomment when done developing
         print("✓ Scoring engine service restarted successfully.")
     except subprocess.CalledProcessError as e:
         print(f"Warning: Could not restart scoring_engine service: {e.stderr.decode() if e.stderr else e}", file=sys.stderr)
         print("The service may not be running. Configuration is still saved.", file=sys.stderr)
     except Exception as e:
         print(f"Warning: Unexpected error restarting service: {e}", file=sys.stderr)
-
-    # TODO: Handled via systemd service instead of cron job
-    # cron = CronTab(user=os.environ["USER"])
-    # command = output_directory + "scoring_engine"
-    # schedule = "* * * * *"
-
-    # if command not in cron:
-    #     try:
-    #         # Create a new cron job
-    #         job = cron.new(command=command, comment="my_cron_job")
-
-    #         # Set the schedule for the cron job
-    #         job.setall(schedule)
-
-    #         # Write the job to the crontab
-    #         job.enable()
-
-    #         # Write the changes to the crontab
-    #         cron.write()
-    #         job = cron.new(command=command, comment="my_cron_job")
-    #         # Create a new cron job
-
-    #         # Set the schedule for the cron job
-    #         job.setall("@reboot")
-
-    #         # Write the job to the crontab
-    #         job.enable()
-
-    #         # Write the changes to the crontab
-    #         cron.write()
-    #     except subprocess.CalledProcessError as e:
-    #         show_error(e)
-    # for proc in psutil.process_iter(["name"]):
-    #     if proc.info["name"] == "scoring_engine":
-    #         sys.exit()
-    # subprocess.Popen(command, shell=True)
     sys.exit()
 
 

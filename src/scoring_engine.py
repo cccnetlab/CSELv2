@@ -374,26 +374,28 @@ def users_manipulation(vulnerability, name):
     user_list = []
     for user in users:
         user_list.append(user[0])
-    if name == "Add User":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if vulnerability[vuln]["User Name"] in user_list:
-                    record_hit(
-                        vulnerability[vuln]["User Name"] + " has been added.",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Account Management")
-    if name == "Remove User":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if vulnerability[vuln]["User Name"] not in user_list:
-                    record_hit(
-                        vulnerability[vuln]["User Name"] + " has been removed.",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Account Management")
+    
+    match name:
+        case "Add User":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    if vulnerability[vuln]["User Name"] in user_list:
+                        record_hit(
+                            vulnerability[vuln]["User Name"] + " has been added.",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Account Management")
+        case "Remove User":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    if vulnerability[vuln]["User Name"] not in user_list:
+                        record_hit(
+                            vulnerability[vuln]["User Name"] + " has been removed.",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Account Management")
 
 
 def firewallVulns(vulnerability, name):
@@ -512,6 +514,7 @@ def audit_check():
 def local_group_policy(vulnerability, name):
     """
     Checks local group policies and records hits/misses based on their settings.
+    Uses user-specified values from the vulnerability configuration.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
@@ -520,7 +523,7 @@ def local_group_policy(vulnerability, name):
     # Create a dictionary from the list of tuples for easier lookup
     policy_settings_dict = dict(login_policy_settings_content)
     
-    # Parse PAM data to extract module settings
+    # Parse PAM data from common-password to extract module settings
     pam_settings_dict = {}
     for pam_line in pamd_policy_settings_content:
         # Replace literal \t with actual tabs, then split by tabs and whitespace
@@ -552,117 +555,322 @@ def local_group_policy(vulnerability, name):
                         unlock_match = re.search(r'unlock_time=(\d+)', options)
                         if unlock_match:
                             pam_settings_dict['unlock_time'] = unlock_match.group(1)
-                            print(f"DEBUG: Found unlock_time setting: {unlock_match.group(1)}")
                     except Exception as e:
-                        print(f"DEBUG: Error parsing unlock_time: {e}")
+                        print(f"Error parsing unlock_time: {e}")
                         
                 if 'deny=' in options:
                     try:
                         deny_match = re.search(r'deny=(\d+)', options)
                         if deny_match:
                             pam_settings_dict['deny'] = deny_match.group(1)
-                            print(f"DEBUG: Found deny setting: {deny_match.group(1)}")
                     except Exception as e:
-                        print(f"DEBUG: Error parsing deny: {e}")
+                        print(f"Error parsing deny: {e}")
     
-    # Attempts to match the policy name and check its, then records hits/misses
+    # Parse PAM data from common-auth to extract faillock settings
+    common_auth_dict = {}
+    for auth_line in common_auth_content:
+        # Replace literal \t with actual tabs, then split by tabs and whitespace
+        normalized_line = auth_line.replace('\\t', '\t')
+        # Split by both tabs and multiple spaces to handle different formatting
+        parts = re.split(r'[\t\s]+', normalized_line.strip())
+        parts = [p for p in parts if p]  # Remove empty strings
+        
+        if len(parts) >= 3:
+            module_type = parts[0]  # e.g., "auth"
+            control = parts[1]      # e.g., "required"
+            module_path = parts[2]  # e.g., "pam_faillock.so"
+            
+            # Extract module options (everything after the module path)
+            if len(parts) > 3 and 'pam_faillock.so' in module_path:
+                options = ' '.join(parts[3:])
+                
+                # Parse faillock-specific options
+                if 'unlock_time=' in options:
+                    try:
+                        unlock_match = re.search(r'unlock_time=(\d+)', options)
+                        if unlock_match:
+                            common_auth_dict['unlock_time'] = unlock_match.group(1)
+                    except Exception as e:
+                        print(f"Error parsing unlock_time from common-auth: {e}")
+                        
+                if 'fail_interval=' in options:
+                    try:
+                        fail_interval_match = re.search(r'fail_interval=(\d+)', options)
+                        if fail_interval_match:
+                            common_auth_dict['fail_interval'] = fail_interval_match.group(1)
+                    except Exception as e:
+                        print(f"Error parsing fail_interval from common-auth: {e}")
+                        
+                if 'deny=' in options:
+                    try:
+                        deny_match = re.search(r'deny=(\d+)', options)
+                        if deny_match:
+                            common_auth_dict['deny'] = deny_match.group(1)
+                    except Exception as e:
+                        print(f"Error parsing deny from common-auth: {e}")
+    
+    # Attempts to match the policy name and check its value, then records hits/misses
+    # TODO: Check functionality for all cases
     try:
         match name:
             case "Minimum Password Age":
-                min_days = int(policy_settings_dict.get("PASS_MIN_DAYS", 0))
-                if 30 <= min_days <= 60:
-                    record_hit(
-                        f"Minimum password age is set to {min_days} days.", vulnerability[1]["Points"]
-                    )
-                else:
+                # Get the expected value from configuration
+                try:
+                    expected_value = int(vulnerability[1].get("Value", 0))
+                except (ValueError, TypeError, KeyError):
+                    print(f"Warning: Missing or invalid 'Value' for {name}, using default 0")
+                    expected_value = 0
+                
+                # Skip check if expected value is 0 (not configured)
+                if expected_value == 0:
+                    record_miss("Local Policy")
+                    return
+                
+                try:
+                    # Use chage to get actual effective password aging (Step 1)
+                    chage_info = get_chage_info()
+                    if chage_info and "min_days" in chage_info:
+                        actual_value = chage_info["min_days"]
+                    else:
+                        # Fallback to login.defs if chage fails
+                        actual_value = int(policy_settings_dict.get("PASS_MIN_DAYS", 0))
+                    
+                    if actual_value == expected_value:
+                        record_hit(
+                            f"Minimum password age is set to {actual_value} days.", 
+                            vulnerability[1]["Points"]
+                        )
+                    else:
+                        record_miss("Local Policy")
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
                     
             case "Maximum Password Age":
-                max_days = int(policy_settings_dict.get("PASS_MAX_DAYS", 0))
-                if 60 <= max_days <= 90:
-                    record_hit(
-                        f"Maximum password age is set to {max_days} days.", vulnerability[1]["Points"]
-                    )
-                else:
+                # Get the expected value from configuration
+                try:
+                    expected_value = int(vulnerability[1].get("Value", 0))
+                except (ValueError, TypeError, KeyError):
+                    print(f"Warning: Missing or invalid 'Value' for {name}, using default 0")
+                    expected_value = 0
+                
+                # Skip check if expected value is 0 (not configured)
+                if expected_value == 0:
+                    record_miss("Local Policy")
+                    return
+                
+                try:
+                    # Use chage to get actual effective password aging (Step 1)
+                    chage_info = get_chage_info()
+                    if chage_info and "max_days" in chage_info:
+                        actual_value = chage_info["max_days"]
+                    else:
+                        # Fallback to login.defs if chage fails
+                        actual_value = int(policy_settings_dict.get("PASS_MAX_DAYS", 99999))
+                    
+                    if actual_value == expected_value:
+                        record_hit(
+                            f"Maximum password age is set to {actual_value} days.", 
+                            vulnerability[1]["Points"]
+                        )
+                    else:
+                        record_miss("Local Policy")
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
 
             case "Minimum Password Length":
-                minlen_value = password_settings_content.get("minlen")
-                if minlen_value:
-                    try:
-                        min_length = int(minlen_value)
-                        if min_length >= 10:
+                # Get the expected value from configuration
+                try:
+                    expected_value = int(vulnerability[1].get("Value", 0))
+                except (ValueError, TypeError, KeyError):
+                    print(f"Warning: Missing or invalid 'Value' for {name}, using default 0")
+                    expected_value = 0
+                
+                # Skip check if expected value is 0 (not configured)
+                if expected_value == 0:
+                    record_miss("Local Policy")
+                    return
+                
+                try:
+                    # Use pwscore to test if requirement is actually enforced (Step 4)
+                    # Pass all configuration sources to the test function
+                    test_results = test_password_requirements(
+                        {'minlen': expected_value},
+                        password_settings_content=password_settings_content,
+                        pamd_policy_settings_content=pamd_policy_settings_content,
+                        login_policy_settings_content=login_policy_settings_content
+                    )
+                    
+                    minlen_result = test_results.get('minlen', {})
+                    configured = minlen_result.get('configured', False)
+                    enforced = minlen_result.get('enforced', False)
+                    actual_value = minlen_result.get('actual_value', 0)
+                    
+                    # Check if the actual configured value matches the expected value
+                    if configured and actual_value == expected_value:
+                        if enforced:
                             record_hit(
-                                f"Minimum password length is set to {min_length}.",
+                                f"Minimum password length is set to {actual_value} and enforced.",
                                 vulnerability[1]["Points"],
                             )
                         else:
-                            record_miss("Local Policy")
-                    except (ValueError, TypeError):
+                            # Configuration is set but not enforced - still give credit
+                            # (enforcement test might fail due to missing pwscore)
+                            record_hit(
+                                f"Minimum password length is set to {actual_value}.",
+                                vulnerability[1]["Points"],
+                            )
+                    else:
                         record_miss("Local Policy")
-                else:
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
 
             case "Maximum Login Tries":
-                # Check PAM deny setting first, then LOGIN_RETRIES
-                pam_deny = pam_settings_dict.get("deny")
-                if pam_deny:
-                    try:
-                        max_attempts = int(pam_deny)
-                        if 3 <= max_attempts <= 5:
+                print("DEBUG: Checking Maximum Login Tries")
+                # Get the expected value from configuration
+                try:
+                    expected_value = int(vulnerability[1].get("Value", 0))
+                except (ValueError, TypeError, KeyError):
+                    print(f"Warning: Missing or invalid 'Value' for {name}, using default 0")
+                    expected_value = 0
+                
+                # Skip check if expected value is 0 (not configured)
+                if expected_value == 0:
+                    record_miss("Local Policy")
+                    return
+                
+                try:
+                    # Use faillock to verify lockout is working (Step 2)
+                    faillock_info = get_faillock_info("root")
+                    
+                    # Check common-auth first (preferred for faillock), then common-password PAM, then LOGIN_RETRIES
+                    deny_value = common_auth_dict.get("deny") or pam_settings_dict.get("deny")
+                    print(f"DEBUG: deny value from PAM: {deny_value}")
+                    if deny_value:
+                        actual_value = int(deny_value)
+                        print(f"DEBUG: Actual PAM deny value: {actual_value}")
+                        print(f"DEBUG: Expected value: {expected_value}")
+                        if actual_value == expected_value:
+                            # Verify faillock is available to enforce this
+                            if faillock_info is not None:
+                                record_hit(
+                                    f"Account lockout threshold is set to {actual_value} failed attempts.", 
+                                    vulnerability[1]["Points"]
+                                )
+                            else:
+                                # Config is set but faillock not available
+                                record_hit(
+                                    f"Account lockout threshold is configured to {actual_value} failed attempts.", 
+                                    vulnerability[1]["Points"]
+                                )
+                        else:
+                            record_miss("Local Policy")
+                    else:
+                        # Fallback to LOGIN_RETRIES from login.defs
+                        actual_value = int(policy_settings_dict.get("LOGIN_RETRIES", 0))
+                        if actual_value == expected_value:
                             record_hit(
-                                f"Account lockout threshold is set to {max_attempts} failed attempts.", vulnerability[1]["Points"]
+                                f"Maximum login tries is set to {actual_value}.", 
+                                vulnerability[1]["Points"]
                             )
                         else:
                             record_miss("Local Policy")
-                    except (ValueError, TypeError):
-                        record_miss("Local Policy")
-                else:
-                    # Fallback to LOGIN_RETRIES from login.defs
-                    login_retries = int(policy_settings_dict.get("LOGIN_RETRIES", 0))
-                    if 3 <= login_retries <= 5:
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Error checking {name}: {e}")
+                    record_miss("Local Policy")
+                    
+            case "Lockout Duration":
+                # Get the expected value from configuration
+                try:
+                    expected_value = int(vulnerability[1].get("Value", 0))
+                except (ValueError, TypeError, KeyError):
+                    print(f"Warning: Missing or invalid 'Value' for {name}, using default 0")
+                    expected_value = 0
+                
+                # Skip check if expected value is 0 (not configured)
+                if expected_value == 0:
+                    record_miss("Local Policy")
+                    return
+                
+                try:
+                    # Check common-auth for fail_interval first (preferred), then fallback to LOGIN_TIMEOUT
+                    fail_interval = common_auth_dict.get("fail_interval")
+                    if fail_interval:
+                        actual_value = int(fail_interval)
+                    else:
+                        # Fallback to LOGIN_TIMEOUT from login.defs
+                        actual_value = int(policy_settings_dict.get("LOGIN_TIMEOUT", 0))
+                    
+                    if actual_value == expected_value:
                         record_hit(
-                            f"Maximum login tries is set to {login_retries}.", vulnerability[1]["Points"]
+                            f"Lockout duration is set to {actual_value} seconds.", 
+                            vulnerability[1]["Points"]
                         )
                     else:
                         record_miss("Local Policy")
-                    
-            case "Lockout Duration":
-                timeout = int(policy_settings_dict.get("LOGIN_TIMEOUT", 0))
-                if timeout >= 30:
-                    record_hit(f"Lockout duration is set to {timeout} seconds.", vulnerability[1]["Points"])
-                else:
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
                     
             case "Lockout Reset Duration":
-                # Check both PAM settings and password settings for unlock_time
-                unlock_time = pam_settings_dict.get("unlock_time") or password_settings_content.get("unlock_time", "0")
+                # Get the expected value from configuration
                 try:
-                    reset_value = int(unlock_time)
-                    if reset_value >= 30:
+                    expected_value = int(vulnerability[1].get("Value", 0))
+                except (ValueError, TypeError, KeyError):
+                    print(f"Warning: Missing or invalid 'Value' for {name}, using default 0")
+                    expected_value = 0
+                
+                # Skip check if expected value is 0 (not configured)
+                if expected_value == 0:
+                    record_miss("Local Policy")
+                    return
+                
+                try:
+                    # Check common-auth first (preferred), then fallback to common-password PAM settings, then pwquality.conf
+                    unlock_time = common_auth_dict.get("unlock_time") or pam_settings_dict.get("unlock_time") or password_settings_content.get("unlock_time", "0")
+                    actual_value = int(unlock_time)
+                    if actual_value == expected_value:
                         record_hit(
-                            f"Account lockout reset duration is set to {reset_value} seconds.", vulnerability[1]["Points"]
+                            f"Account lockout reset duration is set to {actual_value} seconds.", 
+                            vulnerability[1]["Points"]
                         )
                     else:
                         record_miss("Local Policy")
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
                     
             case "Password History":
-                # Check PAM settings first, then fallback to password settings
-                remember_value = pam_settings_dict.get("remember") or password_settings_content.get("remember")
-                if remember_value:
-                    try:
-                        history_size = int(remember_value)
-                        if history_size >= 5:
+                # Get the expected value from configuration
+                try:
+                    expected_value = int(vulnerability[1].get("Value", 0))
+                except (ValueError, TypeError, KeyError):
+                    print(f"Warning: Missing or invalid 'Value' for {name}, using default 0")
+                    expected_value = 0
+                
+                # Skip check if expected value is 0 (not configured)
+                if expected_value == 0:
+                    record_miss("Local Policy")
+                    return
+                
+                try:
+                    # Check PAM settings first, then fallback to password settings
+                    remember_value = pam_settings_dict.get("remember") or password_settings_content.get("remember")
+                    if remember_value:
+                        actual_value = int(remember_value)
+                        if actual_value == expected_value:
                             record_hit(
-                                f"Password history size is set to {history_size}.", vulnerability[1]["Points"]
+                                f"Password history size is set to {actual_value}.", 
+                                vulnerability[1]["Points"]
                             )
                         else:
                             record_miss("Local Policy")
-                    except (ValueError, TypeError):
+                    else:
                         record_miss("Local Policy")
-                else:
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
                     
             case "Audit":
@@ -684,7 +892,9 @@ def local_group_policy(vulnerability, name):
                 print(f"Warning: Unknown policy name '{name}' in local_group_policy")
                 
     except (KeyError, ValueError, TypeError) as e:
+        print(f"Error processing policy '{name}': {e}")
         warnings.warn(f"Error processing policy '{name}': {e}")
+        record_miss("Local Policy")
 
 
 # test
@@ -697,63 +907,77 @@ def group_manipulation(vulnerability, name):
         name (str): The action being checked (Add Admin, Remove Admin, etc.).
     """
     groups = grp.getgrall()
-    if name == "Add Admin":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if vulnerability[vuln]["User Name"] in grp.getgrnam("sudo")[3]:
-                    record_hit(
-                        vulnerability[vuln]["User Name"]
-                        + " has been promoted to administrator.",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Account Management")
-    if name == "Remove Admin":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if vulnerability[vuln]["User Name"] not in grp.getgrnam("sudo")[3]:
-                    record_hit(
-                        vulnerability[vuln]["User Name"]
-                        + " has been demoted to standard user.",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Account Management")
-    if name == "Add User to Group":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if (
-                    vulnerability[vuln]["User Name"]
-                    in grp.getgrnam[vulnerability[vuln]["Group Name"]][3]
-                ):
-                    record_hit(
-                        vulnerability[vuln]["User Name"]
-                        + " is in the "
-                        + vulnerability[vuln]["Group Name"]
-                        + " group.",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Account Management")
-    if name == "Remove User from Group":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if (
-                    vulnerability[vuln]["User Name"]
-                    not in grp.getgrnam[vulnerability[vuln]["Group Name"]][3]
-                ):
-                    record_hit(
-                        vulnerability[vuln]["User Name"]
-                        + " is no longer in the "
-                        + vulnerability[vuln]["Group Name"]
-                        + " group.",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Account Management")
+    
+    match name:
+        case "Add Admin":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    if vulnerability[vuln]["User Name"] in grp.getgrnam("sudo")[3]:
+                        record_hit(
+                            vulnerability[vuln]["User Name"]
+                            + " has been promoted to administrator.",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Account Management")
+        case "Remove Admin":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    if vulnerability[vuln]["User Name"] not in grp.getgrnam("sudo")[3]:
+                        record_hit(
+                            vulnerability[vuln]["User Name"]
+                            + " has been demoted to standard user.",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Account Management")
+        case "Add User to Group":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    try:
+                        if (
+                            vulnerability[vuln]["User Name"]
+                            in grp.getgrnam(vulnerability[vuln]["Group Name"])[3]
+                        ):
+                            record_hit(
+                                vulnerability[vuln]["User Name"]
+                                + " is in the "
+                                + vulnerability[vuln]["Group Name"]
+                                + " group.",
+                                vulnerability[vuln]["Points"],
+                            )
+                        else:
+                            record_miss("Account Management")
+                    except KeyError: # If the group does not exist, can't be in group, miss.
+                        record_miss("Account Management")
+        case "Remove User from Group":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    try:
+                        if (
+                            vulnerability[vuln]["User Name"]
+                            not in grp.getgrnam(vulnerability[vuln]["Group Name"])[3]
+                        ):
+                            record_hit(
+                                vulnerability[vuln]["User Name"]
+                                + " is no longer in the "
+                                + vulnerability[vuln]["Group Name"]
+                                + " group.",
+                                vulnerability[vuln]["Points"],
+                            )
+                        else:
+                            record_miss("Account Management")
+                    except KeyError: # If the group does not exist, user can't be in group, hit.
+                        record_hit(
+                            vulnerability[vuln]["User Name"]
+                            + " is no longer in the "
+                            + vulnerability[vuln]["Group Name"]
+                            + " group.",
+                            vulnerability[vuln]["Points"],
+                        )
 
 
-# check
+# TODO: Modify after properly implementing 
 def user_change_password(vulnerability):
     """
     Checks if a user's password has been changed recently.
@@ -1020,38 +1244,39 @@ def programs(vulnerability, name):
         vulnerability (list): A list of vulnerabilities to check.
         name (str): The type of program check (Good Program, Bad Program, etc.).
     """
-    if name == "Good Program":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if vulnerability[vuln]["Program Name"] in program_content:
-                    record_hit(
-                        vulnerability[vuln]["Program Name"] + " is installed",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Program Management")
-    if name == "Bad Program":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if vulnerability[vuln]["Program Name"] not in program_content:
-                    record_hit(
-                        vulnerability[vuln]["Program Name"] + " is not installed",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Program Management")
-    if name == "Update Program":
-        for vuln in vulnerability:
-            if vuln != 1:
-                if vulnerability[vuln]["Version"] not in program_versions:
-                    record_hit(
-                        vulnerability[vuln]["Version"]
-                        + " version of "
-                        + vulnerability[vuln]["Program Name"],
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Program Management")
+    match name:
+        case "Good Program":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    if vulnerability[vuln]["Program Name"] in program_content:
+                        record_hit(
+                            vulnerability[vuln]["Program Name"] + " is installed",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Program Management")
+        case "Bad Program":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    if vulnerability[vuln]["Program Name"] not in program_content:
+                        record_hit(
+                            vulnerability[vuln]["Program Name"] + " is not installed",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Program Management")
+        case "Update Program":
+            for vuln in vulnerability:
+                if vuln != 1:
+                    if vulnerability[vuln]["Version"] not in program_versions:
+                        record_hit(
+                            vulnerability[vuln]["Version"]
+                            + " version of "
+                            + vulnerability[vuln]["Program Name"],
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Program Management")
 
 
 def critical_programs(vulnerability):
@@ -1155,15 +1380,19 @@ def no_scoring_available(name):
 
 def load_policy_settings():
     """
-    Loads policy settings from the /etc/login.defs file and returns them as a list.
+    Loads policy and password settings from multiple configuration files.
     
     Returns:
-        list: A list of tuples containing key-value pairs of policy settings.
+        tuple: A tuple containing:
+            - login_defs_list (list): Key-value pairs from /etc/login.defs
+            - pamd_defs_list (list): Password lines from /etc/pam.d/common-password
+            - password_settings (dict): Password settings from /etc/security/pwquality.conf
+            - common_auth_list (list): Auth lines from /etc/pam.d/common-auth
     """
+    # Load /etc/login.defs settings
     with open("/etc/login.defs", "r") as file:
         lines = file.readlines()
     login_defs_list = []
-    pamd_defs_list = []
 
     # Scans through each line in the file and extracts key-value pairs
     for line in lines:
@@ -1172,13 +1401,419 @@ def load_policy_settings():
             key, value = line.split()
             login_defs_list.append((key, value))
 
+    # Load /etc/pam.d/common-password settings
+    pamd_defs_list = []
     with open("/etc/pam.d/common-password", "r") as common_password_file:
         for line in common_password_file:
             line = line.strip()
             if line.startswith("password"):
                 pamd_defs_list.append(line)
 
-    return login_defs_list, pamd_defs_list
+    # Load /etc/pam.d/common-auth settings
+    common_auth_list = []
+    try:
+        with open("/etc/pam.d/common-auth", "r") as common_auth_file:
+            for line in common_auth_file:
+                line = line.strip()
+                if line.startswith("auth"):
+                    common_auth_list.append(line)
+    except FileNotFoundError:
+        pass  # File may not exist on all systems
+
+    # Load /etc/security/pwquality.conf settings
+    password_settings = {}
+    with open("/etc/security/pwquality.conf", "r") as file:
+        lines = file.readlines()
+    for line in lines:
+        line = line.strip()
+        if line and "=" in line:
+            key, value = line.split("=")
+            key = key.strip().lstrip("# ")
+            password_settings[key.strip()] = value.strip()
+
+    return login_defs_list, pamd_defs_list, password_settings, common_auth_list
+
+
+def get_chage_info():
+    """
+    Gets password aging information for a user using chage command.
+    Creates a temporary test user to verify the actual effective password aging settings
+    from system configuration, then cleans up the test user.
+    Uses pwmake to generate a password that meets all system requirements.
+    
+    Returns:
+        dict: Dictionary containing password aging information, or empty dict on error.
+    """
+    test_username = "csel_pwtest_user"
+    
+    try:
+        # Generate a password that meets system requirements using pwmake
+        # pwmake generates passwords with entropy of specified bits (default 128)
+        try:
+            pwmake_result = subprocess.run(
+                ["pwmake", "128"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            test_password = pwmake_result.stdout.strip()
+            
+            if not test_password:
+                # Fallback to a strong password if pwmake fails
+                print("Warning: pwmake returned empty password, using fallback")
+                test_password = "TempP@ss123!Secure"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # pwmake not available, use a strong fallback password
+            print("Warning: pwmake not available, using fallback password")
+            test_password = "TempP@ss123!Secure"
+        
+        # Create a temporary test user to check actual system password policies
+        # This user will inherit the system's default password aging settings
+        create_result = subprocess.run(
+            ["useradd", "-m", "-s", "/bin/bash", test_username],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        if create_result.returncode != 0:
+            # User might already exist, try to use it anyway
+            print(f"Note: Test user {test_username} may already exist, continuing...")
+        
+        # Set the generated password for the test user
+        # Use chpasswd with the generated password
+        passwd_result = subprocess.run(
+            ["chpasswd"],
+            input=f"{test_username}:{test_password}",
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        if passwd_result.returncode != 0:
+            print(f"Warning: Could not set password for test user {test_username}")
+            print(f"Error: {passwd_result.stderr}")
+        
+        # Now get the chage info for this test user
+        # This will show the actual system defaults that are enforced
+        result = subprocess.run(
+            ["chage", "-l", test_username],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        chage_info = {}
+        for line in result.stdout.splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                key = key.strip()
+                value = value.strip()
+                
+                # Parse specific fields we care about
+                if "Minimum number of days between password change" in key:
+                    try:
+                        chage_info["min_days"] = int(value)
+                    except (ValueError, TypeError):
+                        chage_info["min_days"] = 0
+                elif "Maximum number of days between password change" in key:
+                    try:
+                        chage_info["max_days"] = int(value)
+                    except (ValueError, TypeError):
+                        chage_info["max_days"] = 99999
+        
+        # Clean up: delete the test user and their home directory
+        cleanup_result = subprocess.run(
+            ["userdel", "-r", test_username],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        if cleanup_result.returncode != 0:
+            print(f"Warning: Could not fully clean up test user {test_username}")
+                        
+        return chage_info
+        
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        # Attempt cleanup even on error
+        try:
+            subprocess.run(
+                ["userdel", "-r", test_username],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+        except:
+            pass
+        
+        print(f"Warning: Could not get chage info using test user: {e}")
+        return {}
+
+
+def get_faillock_info(username="root"):
+    """
+    Gets account lockout information using faillock command.
+    This shows the actual effective lockout settings.
+    
+    Args:
+        username (str): The username to check. Defaults to "root".
+    
+    Returns:
+        dict: Dictionary containing faillock information, or empty dict on error.
+    """
+    try:
+        result = subprocess.run(
+            ["faillock", "--user", username],
+            capture_output=True,
+            text=True,
+            check=False  # Don't raise on non-zero exit (user might not exist)
+        )
+        
+        faillock_info = {
+            "failed_attempts": 0,
+            "locked": False
+        }
+        
+        # Parse the output for failed attempts
+        for line in result.stdout.splitlines():
+            if "failures:" in line.lower():
+                try:
+                    # Extract number from line like "When                Type  Source                                           Valid"
+                    # or actual failure count
+                    parts = line.split()
+                    for i, part in enumerate(parts):
+                        if part.isdigit():
+                            faillock_info["failed_attempts"] = int(part)
+                            break
+                except (ValueError, IndexError):
+                    pass
+                    
+        return faillock_info
+    except FileNotFoundError:
+        print("Warning: faillock command not found. Install libpam-modules for lockout checking.")
+        return {}
+
+
+def test_password_requirements(requirements, password_settings_content=None, pamd_policy_settings_content=None, login_policy_settings_content=None, password_to_test=None):
+    """
+    Tests password requirements using pwscore/pwmake to verify they're actually enforced.
+    Generates test passwords that should pass/fail based on requirements, OR tests a provided password.
+    
+    Args:
+        requirements (dict): Dictionary of password requirements to test.
+                           Supported keys: 'minlen', 'dcredit', 'ucredit', 'lcredit', 'ocredit'
+        password_settings_content (dict): Password settings from /etc/security/pwquality.conf
+        pamd_policy_settings_content (list): PAM password lines from /etc/pam.d/common-password
+        login_policy_settings_content (list): Key-value pairs from /etc/login.defs
+        password_to_test (str): Optional password to test against requirements. If provided,
+                               the function will check this password instead of generating test passwords.
+    
+    Returns:
+        dict: Results dictionary with keys for each requirement tested.
+              Format: {
+                  'minlen': {'configured': True/False, 'enforced': True/False, 'actual_value': int, 'password_passes': True/False},
+                  'dcredit': {...},
+                  ...
+              }
+              If password_to_test is provided, 'password_passes' indicates if the password meets the expected requirement.
+    """
+    results = {}
+    
+    # Check if pwscore/pwmake are available
+    try:
+        subprocess.run(["which", "pwscore"], capture_output=True, check=True)
+        has_pwscore = True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        has_pwscore = False
+        print("Warning: pwscore not available. Install libpwquality-tools for password quality testing.")
+        return results
+    
+    # Test minimum password length
+    if 'minlen' in requirements and requirements['minlen']:
+        try:
+            expected_value = int(requirements['minlen'])
+            
+            # Check configuration sources in priority order:
+            # 1. /etc/security/pwquality.conf
+            # 2. PAM modules (pam_pwquality, pam_unix)
+            # 3. /etc/login.defs
+            actual_value = None
+            
+            # First check pwquality.conf
+            if password_settings_content and 'minlen' in password_settings_content:
+                try:
+                    actual_value = int(password_settings_content['minlen'])
+                except (ValueError, TypeError):
+                    pass
+            
+            # If not found, check PAM modules
+            if actual_value is None and pamd_policy_settings_content:
+                # Parse PAM data to extract module settings
+                pam_settings_dict = {}
+                for pam_line in pamd_policy_settings_content:
+                    normalized_line = pam_line.replace('\\t', '\t')
+                    parts = re.split(r'[\t\s]+', normalized_line.strip())
+                    parts = [p for p in parts if p]
+                    
+                    if len(parts) >= 3:
+                        module_path = parts[2]
+                        
+                        # Check if pam_pwquality or pam_unix is enabled
+                        if 'pam_pwquality.so' in module_path or 'pam_unix.so' in module_path:
+                            # Extract module options
+                            if len(parts) > 3:
+                                for option in parts[3:]:
+                                    if '=' in option:
+                                        key, value = option.split('=', 1)
+                                        pam_settings_dict[key.strip()] = value.strip()
+                
+                # Check for minlen in PAM settings
+                if 'minlen' in pam_settings_dict:
+                    try:
+                        actual_value = int(pam_settings_dict['minlen'])
+                    except (ValueError, TypeError):
+                        pass
+            
+            # If still not found, check login.defs
+            if actual_value is None and login_policy_settings_content:
+                policy_settings_dict = dict(login_policy_settings_content)
+                if 'PASS_MIN_LEN' in policy_settings_dict:
+                    try:
+                        actual_value = int(policy_settings_dict['PASS_MIN_LEN'])
+                    except (ValueError, TypeError):
+                        pass
+            
+            # Determine if configured based on EXACT match with expected value
+            if actual_value is None:
+                actual_value = 0
+                configured = False
+            elif actual_value == expected_value:
+                configured = True
+            else:
+                configured = False
+            
+            results['minlen'] = {
+                'configured': configured,
+                'enforced': False,
+                'actual_value': actual_value
+            }
+            
+            # If a password was provided, test it against the expected value
+            if password_to_test is not None:
+                password_length = len(password_to_test)
+                password_passes = password_length >= expected_value
+                results['minlen']['password_passes'] = password_passes
+                # Don't do enforcement testing if a specific password was provided
+            # Only test enforcement if configured (actual matches expected) and value > 0 and no password provided
+            elif configured and expected_value > 0:
+                # Generate a password that meets the length requirement using pwmake
+                # Passing password should be EXACTLY expected_value length
+                try:
+                    pwmake_result = subprocess.run(
+                        ["pwmake", "128"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    passing_password = pwmake_result.stdout.strip()
+                    
+                    if not passing_password or len(passing_password) < expected_value:
+                        # Fallback if pwmake returns empty or too short
+                        print("Warning: pwmake returned insufficient password for passing test, using fallback")
+                        passing_password = 'A' * (expected_value // 4) + 'a' * (expected_value // 4) + \
+                                         '1' * (expected_value // 4) + '!' * (expected_value // 4) + \
+                                         'Aa1!' * ((expected_value % 4))
+                        passing_password = passing_password[:expected_value]
+                    else:
+                        # Truncate to be EXACTLY expected_value length
+                        passing_password = passing_password[:expected_value]
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    # pwmake not available, use fallback
+                    print("Warning: pwmake not available for passing test, using fallback password")
+                    passing_password = 'A' * (expected_value // 4) + 'a' * (expected_value // 4) + \
+                                     '1' * (expected_value // 4) + '!' * (expected_value // 4) + \
+                                     'Aa1!' * ((expected_value % 4))
+                    passing_password = passing_password[:expected_value]
+                
+                # Generate a password that FAILS the length requirement (too short)
+                # Use pwmake then truncate to be EXACTLY 1 character shorter than expected_value
+                try:
+                    pwmake_result = subprocess.run(
+                        ["pwmake", "128"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    failing_password = pwmake_result.stdout.strip()
+                    
+                    if not failing_password or len(failing_password) < expected_value:
+                        # Fallback if pwmake returns empty or too short
+                        print("Warning: pwmake returned insufficient password for failing test, using fallback")
+                        failing_password = 'Aa1!' * max(1, (expected_value - 1) // 4)
+                        failing_password = failing_password[:max(1, expected_value - 1)]
+                    else:
+                        # Truncate to be exactly 1 character shorter than expected_value
+                        failing_password = failing_password[:max(1, expected_value - 1)]
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    # pwmake not available, use fallback
+                    print("Warning: pwmake not available for failing test, using fallback password")
+                    failing_password = 'Aa1!' * max(1, (expected_value - 1) // 4)
+                    failing_password = failing_password[:max(1, expected_value - 1)]
+                
+                # Test the passing password
+                result_pass = subprocess.run(
+                    ["pwscore"],
+                    input=passing_password,
+                    capture_output=True,
+                    text=True
+                )
+                
+                # Test the failing password
+                result_fail = subprocess.run(
+                    ["pwscore"],
+                    input=failing_password,
+                    capture_output=True,
+                    text=True
+                )
+                
+                # If passing password gets a good score and failing password gets rejected,
+                # the requirement is enforced
+                pass_score = 0
+                fail_score = 0
+                
+                try:
+                    pass_score = int(result_pass.stdout.strip())
+                except (ValueError, AttributeError):
+                    pass
+                    
+                # Check if failing password was rejected
+                if result_fail.returncode != 0 or "too short" in result_fail.stderr.lower():
+                    results['minlen']['enforced'] = True
+                elif pass_score > 0 and fail_score == 0:
+                    results['minlen']['enforced'] = True
+                
+        except (ValueError, TypeError, subprocess.SubprocessError) as e:
+            print(f"Error testing minlen requirement: {e}")
+            results['minlen'] = {
+                'configured': False,
+                'enforced': False,
+                'actual_value': 0,
+                'error': str(e)
+            }
+    
+    # Placeholder for future requirement tests (uppercase, lowercase, digits, special chars)
+    # These can be expanded as needed
+    for req_type in ['dcredit', 'ucredit', 'lcredit', 'ocredit']:
+        if req_type in requirements and requirements[req_type]:
+            results[req_type] = {
+                'configured': True,
+                'enforced': False,  # Will implement testing in future
+                'actual_value': requirements[req_type],
+                'note': 'Testing not yet implemented'
+            }
+    
+    return results
 
 
 def get_file_names_in_directory(directory):
@@ -1233,26 +1868,6 @@ def load_versions():
         package_version = parts[2]
         package_list.append({"name": package_name, "version": package_version})
     return package_list
-
-
-# fix
-def load_password_settings():
-    """
-    Loads password settings from the /etc/security/pwquality.conf file.
-    
-    Returns:
-        dict: A dictionary of password settings.
-    """
-    password_settings = {}
-    with open("/etc/security/pwquality.conf", "r") as file:
-        lines = file.readlines()
-    for line in lines:
-        line = line.strip()
-        if line and "=" in line:
-            key, value = line.split("=")
-            key = key.strip().lstrip("# ")
-            password_settings[key.strip()] = value.strip()
-    return password_settings
 
 
 def load_services():
@@ -1530,8 +2145,7 @@ while True:
         total_points = 0
         total_vulnerabilities = 0
         critical_items = []
-        login_policy_settings_content, pamd_policy_settings_content = load_policy_settings() # Split into login_defs_list and pamd_defs_list to handle different data types
-        password_settings_content = load_password_settings()
+        login_policy_settings_content, pamd_policy_settings_content, password_settings_content, common_auth_content = load_policy_settings()
         services_content = load_services()
         program_content = load_programs()
         program_versions = load_versions()

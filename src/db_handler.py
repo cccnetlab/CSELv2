@@ -26,12 +26,21 @@ except Exception:
 db = os.path.join(base_path, "save_data.db")
 
 base = declarative_base()
+# Improved SQLite configuration for better concurrency handling
+# - WAL mode allows concurrent reads and single writer
+# - Increased timeout to 30 seconds to handle conflicts
+# - check_same_thread=False allows multi-threaded access
 engine = sa.create_engine("sqlite:///" + db, 
-                         pool_timeout=20, 
+                         pool_timeout=30, 
                          pool_recycle=-1,
-                         connect_args={'timeout': 20})
+                         connect_args={
+                             'timeout': 30,
+                             'check_same_thread': False,
+                         },
+                         # Add isolation level for better concurrent access
+                         isolation_level="READ UNCOMMITTED")
 base.metadata.bind = engine
-Session = orm.scoped_session(orm.sessionmaker(bind=engine))
+Session = orm.scoped_session(orm.sessionmaker(bind=engine, autoflush=False))
 
 def get_session():
     """Get a new database session"""
@@ -165,21 +174,44 @@ class Settings:
     def update_score(self, entry):
         """
         Updates the current score and vulnerability count in the settings table.
+        Uses retry logic to handle database locks from concurrent access.
         """
-        session = get_session()
-        try:
-            # Query the settings record within the current session
-            settings = session.query(SettingsModel).first()
-            if settings:
-                settings.current_points = entry["Current Points"]
-                settings.current_vuln = entry["Current Vulnerabilities"]
-                session.commit()
-                
-                # Update in-memory object
-                self.settings.current_points = settings.current_points
-                self.settings.current_vuln = settings.current_vuln
-        finally:
-            close_session(session)
+        import time
+        max_retries = 3
+        retry_delay = 0.5  # Start with 0.5 seconds
+        
+        for attempt in range(max_retries):
+            session = get_session()
+            try:
+                # Query the settings record within the current session
+                settings = session.query(SettingsModel).first()
+                if settings:
+                    settings.current_points = entry["Current Points"]
+                    settings.current_vuln = entry["Current Vulnerabilities"]
+                    session.commit()
+                    
+                    # Update in-memory object
+                    self.settings.current_points = settings.current_points
+                    self.settings.current_vuln = settings.current_vuln
+                    return  # Success, exit the function
+            except sa.exc.OperationalError as e:
+                # Database is locked, retry
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    print(f"Warning: Database locked, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    session.rollback()
+                else:
+                    # Last attempt failed or different error
+                    print(f"Error: Failed to update score after {max_retries} attempts: {e}")
+                    session.rollback()
+                    raise
+            except Exception as e:
+                print(f"Error updating score: {e}")
+                session.rollback()
+                raise
+            finally:
+                close_session(session)
 
 
 class CategoryModels(base):
