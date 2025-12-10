@@ -1,4 +1,4 @@
 Traceback (most recent call last):
-  File "/home/jkim/Desktop/CSELv2/src/scoring_engine.py", line 2153, in <module>
+  File "/home/jkim/Desktop/CSELv2/src/scoring_engine.py", line 2327, in <module>
     time.sleep(15)
 KeyboardInterrupt

@@ -520,6 +520,56 @@ def local_group_policy(vulnerability, name):
         vulnerability (list): A list of vulnerabilities to check.
         name (str): The name of the policy being checked.
     """
+    # ===== VALIDATION PHASE: Check if PAM configuration files are valid =====
+    # If PAM configurations are invalid, no points should be awarded as the system
+    # may not be enforcing the configured policies correctly.
+    # IMPORTANT: Uses SAFE, READ-ONLY validation only - no authentication attempts!
+    
+    try:
+        # Basic file validation - check for common syntax errors
+        # This is safe and won't trigger authentication or account lockouts
+        pam_files_to_check = [
+            "/etc/pam.d/common-auth",
+            "/etc/pam.d/common-password",
+        ]
+        
+        for pam_file in pam_files_to_check:
+            try:
+                with open(pam_file, 'r') as f:
+                    for line_num, line in enumerate(f, 1):
+                        line = line.strip()
+                        # Skip comments and empty lines
+                        if not line or line.startswith('#'):
+                            continue
+                        
+                        # Basic syntax check: should start with valid PAM type
+                        valid_types = ['auth', 'account', 'password', 'session']
+                        parts = line.split()
+                        if len(parts) < 2:
+                            print(f"WARNING: Invalid PAM syntax in {pam_file} line {line_num}: {line}")
+                            print(f"No local policy points will be awarded due to invalid PAM configuration.")
+                            record_miss("Local Policy")
+                            return
+                        
+                        if parts[0] not in valid_types:
+                            print(f"WARNING: Invalid PAM type in {pam_file} line {line_num}: {parts[0]}")
+                            print(f"No local policy points will be awarded due to invalid PAM configuration.")
+                            record_miss("Local Policy")
+                            return
+                            
+            except Exception as e:
+                print(f"WARNING: Could not validate {pam_file}: {e}")
+                print(f"No local policy points will be awarded due to PAM configuration issues.")
+                record_miss("Local Policy")
+                return
+                    
+    except Exception as e:
+        print(f"WARNING: Unexpected error during PAM validation: {e}")
+        print("No local policy points will be awarded due to PAM validation error.")
+        record_miss("Local Policy")
+        return
+    
+    # ===== PARSING PHASE: Extract settings from valid configuration files =====
     # Create a dictionary from the list of tuples for easier lookup
     policy_settings_dict = dict(login_policy_settings_content)
     
@@ -584,7 +634,7 @@ def local_group_policy(vulnerability, name):
             if len(parts) > 3 and 'pam_faillock.so' in module_path:
                 options = ' '.join(parts[3:])
                 
-                # Parse faillock-specific options
+                # Parse faillock-specific options ADD FUTURE CONFIGURATIONS HERE
                 if 'unlock_time=' in options:
                     try:
                         unlock_match = re.search(r'unlock_time=(\d+)', options)
@@ -728,7 +778,6 @@ def local_group_policy(vulnerability, name):
                     record_miss("Local Policy")
 
             case "Maximum Login Tries":
-                print("DEBUG: Checking Maximum Login Tries")
                 # Get the expected value from configuration
                 try:
                     expected_value = int(vulnerability[1].get("Value", 0))
@@ -747,11 +796,8 @@ def local_group_policy(vulnerability, name):
                     
                     # Check common-auth first (preferred for faillock), then common-password PAM, then LOGIN_RETRIES
                     deny_value = common_auth_dict.get("deny") or pam_settings_dict.get("deny")
-                    print(f"DEBUG: deny value from PAM: {deny_value}")
                     if deny_value:
                         actual_value = int(deny_value)
-                        print(f"DEBUG: Actual PAM deny value: {actual_value}")
-                        print(f"DEBUG: Expected value: {expected_value}")
                         if actual_value == expected_value:
                             # Verify faillock is available to enforce this
                             if faillock_info is not None:
@@ -782,6 +828,31 @@ def local_group_policy(vulnerability, name):
                     record_miss("Local Policy")
                     
             case "Lockout Duration":
+                """
+                Checks account lockout duration after failed login attempts.
+                
+                Linux Account Lockout Duration Configuration Methods (in priority order):
+
+                1. /etc/security/faillock.conf (PRIORITY - Centralized faillock config)
+                   Location: /etc/security/faillock.conf
+                   Parameter: unlock_time = <seconds>
+                   Example: unlock_time = 900
+                   Notes: Centralized configuration file for pam_faillock
+                          Takes precedence over inline PAM parameters if present
+                          Introduced in newer versions of pam_faillock
+
+                2. pam_faillock.so (Modern PAM faillock module)
+                   Location: /etc/pam.d/common-auth or /etc/pam.d/system-auth
+                   Parameter: unlock_time=<seconds>
+                   Example: auth required pam_faillock.so unlock_time=900
+                   Notes: Primary mechanism on modern systems (Ubuntu 20.04+, RHEL 8+)
+                          unlock_time=0 means permanent lockout (admin must unlock)
+                          Works in conjunction with deny= and fail_interval=
+                
+                Current Implementation Priority:
+                - Checks pam_faillock.so unlock_time from /etc/pam.d/common-auth (common_auth_dict)
+                - Falls back to configuration in /etc/security/faillock.conf (faillock_settings_content)
+                """
                 # Get the expected value from configuration
                 try:
                     expected_value = int(vulnerability[1].get("Value", 0))
@@ -795,26 +866,54 @@ def local_group_policy(vulnerability, name):
                     return
                 
                 try:
-                    # Check common-auth for fail_interval first (preferred), then fallback to LOGIN_TIMEOUT
-                    fail_interval = common_auth_dict.get("fail_interval")
-                    if fail_interval:
-                        actual_value = int(fail_interval)
+                    # Priority 0: Check /etc/security/faillock.conf (highest priority - centralized config)
+                    # Priority 1: Check pam_faillock.so unlock_time from common-auth
+                    unlock_time = (common_auth_dict.get("unlock_time") or 
+                                   faillock_settings_content.get("unlock_time"))
+                    if unlock_time:
+                        actual_value = int(unlock_time)
+                        if actual_value == expected_value:
+                            record_hit(
+                                f"Account lockout duration (unlock_time) is set to {actual_value} seconds.", 
+                                vulnerability[1]["Points"]
+                            )
+                        else:
+                            record_miss("Local Policy")
                     else:
-                        # Fallback to LOGIN_TIMEOUT from login.defs
-                        actual_value = int(policy_settings_dict.get("LOGIN_TIMEOUT", 0))
-                    
-                    if actual_value == expected_value:
-                        record_hit(
-                            f"Lockout duration is set to {actual_value} seconds.", 
-                            vulnerability[1]["Points"]
-                        )
-                    else:
+                        # No unlock_time found in any configuration
                         record_miss("Local Policy")
                 except (ValueError, TypeError, KeyError) as e:
                     print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
                     
             case "Lockout Reset Duration":
+                """
+                Checks account lockout reset/observation window duration.
+                This is the time window in which failed login attempts are counted.
+                
+                Linux Account Lockout Reset Duration Configuration Methods (in priority order):
+                
+                1. pam_faillock.so (HIGHEST PRIORITY - Modern PAM faillock module)
+                   Location: /etc/pam.d/common-auth or /etc/pam.d/system-auth
+                   Parameter: fail_interval=<seconds>
+                   Example: auth required pam_faillock.so fail_interval=900
+                   Notes: Primary mechanism on modern systems (Ubuntu 20.04+, RHEL 8+)
+                          Defines the time window for counting failed attempts
+                          After this interval, the failure count resets to 0
+                          Works with deny= to determine when lockout occurs
+                
+                2. /etc/security/faillock.conf (HIGH PRIORITY - Centralized faillock config)
+                   Location: /etc/security/faillock.conf
+                   Parameter: fail_interval = <seconds>
+                   Example: fail_interval = 900
+                   Notes: Centralized configuration file for pam_faillock
+                          Takes precedence over inline PAM parameters if present
+                          Introduced in newer versions of pam_faillock
+                
+                Current Implementation Priority:
+                - Checks fail_interval from /etc/pam.d/common-auth (common_auth_dict)
+                - Falls back to /etc/security/faillock.conf (faillock_settings_content)
+                """
                 # Get the expected value from configuration
                 try:
                     expected_value = int(vulnerability[1].get("Value", 0))
@@ -828,15 +927,23 @@ def local_group_policy(vulnerability, name):
                     return
                 
                 try:
-                    # Check common-auth first (preferred), then fallback to common-password PAM settings, then pwquality.conf
-                    unlock_time = common_auth_dict.get("unlock_time") or pam_settings_dict.get("unlock_time") or password_settings_content.get("unlock_time", "0")
-                    actual_value = int(unlock_time)
-                    if actual_value == expected_value:
-                        record_hit(
-                            f"Account lockout reset duration is set to {actual_value} seconds.", 
-                            vulnerability[1]["Points"]
-                        )
+                    # Priority 0: Check /etc/security/faillock.conf (highest priority - centralized config)
+                    # Priority 1: Check pam_faillock.so fail_interval from common-auth
+                    # Priority 2: Check fail_interval from common-password PAM settings
+                    # Note: pwquality.conf does not contain fail_interval, so no fallback there
+                    fail_interval = (common_auth_dict.get("fail_interval")  or faillock_settings_content.get("fail_interval"))
+                    
+                    if fail_interval:
+                        actual_value = int(fail_interval)
+                        if actual_value == expected_value:
+                            record_hit(
+                                f"Account lockout observation window (fail_interval) is set to {actual_value} seconds.", 
+                                vulnerability[1]["Points"]
+                            )
+                        else:
+                            record_miss("Local Policy")
                     else:
+                        # No fail_interval found in any configuration
                         record_miss("Local Policy")
                 except (ValueError, TypeError, KeyError) as e:
                     print(f"Error checking {name}: {e}")
@@ -1388,6 +1495,7 @@ def load_policy_settings():
             - pamd_defs_list (list): Password lines from /etc/pam.d/common-password
             - password_settings (dict): Password settings from /etc/security/pwquality.conf
             - common_auth_list (list): Auth lines from /etc/pam.d/common-auth
+            - faillock_settings (dict): Faillock settings from /etc/security/faillock.conf
     """
     # Load /etc/login.defs settings
     with open("/etc/login.defs", "r") as file:
@@ -1431,7 +1539,23 @@ def load_policy_settings():
             key = key.strip().lstrip("# ")
             password_settings[key.strip()] = value.strip()
 
-    return login_defs_list, pamd_defs_list, password_settings, common_auth_list
+    # Load /etc/security/faillock.conf settings
+    faillock_settings = {}
+    try:
+        with open("/etc/security/faillock.conf", "r") as file:
+            lines = file.readlines()
+        for line in lines:
+            line = line.strip()
+            # Skip comments and empty lines
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)  # Split on first = only
+                key = key.strip()
+                value = value.strip()
+                faillock_settings[key] = value
+    except FileNotFoundError:
+        pass  # File may not exist on all systems
+
+    return login_defs_list, pamd_defs_list, password_settings, common_auth_list, faillock_settings
 
 
 def get_chage_info():
@@ -2145,7 +2269,7 @@ while True:
         total_points = 0
         total_vulnerabilities = 0
         critical_items = []
-        login_policy_settings_content, pamd_policy_settings_content, password_settings_content, common_auth_content = load_policy_settings()
+        login_policy_settings_content, pamd_policy_settings_content, password_settings_content, common_auth_content, faillock_settings_content = load_policy_settings()
         services_content = load_services()
         program_content = load_programs()
         program_versions = load_versions()
