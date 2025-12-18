@@ -3,6 +3,9 @@
 ### src
 Contains all python files essential to scoring engine functionality.
 
+### useful_scripts
+Contains extra scripts you can use to aid development.
+
 ### setup
 Contains all files essential to setting up the proper binaries, dependencies, and folder structure.
 
@@ -23,6 +26,8 @@ Sets up scoring_engine binary from dist/ as a service via symlink located in: **
 - Sets up assets in **/etc/CYBERPATRIOT_DO_NOT_REMOVE**
 - Optionally runs both binaries.
 
+## Functionality
+
 ### configurator.py
 Main job is to set and send configurations for the scoring engine to **db_handler** to persist and manage.
 
@@ -32,6 +37,8 @@ Main job is to set and send configurations for the scoring engine to **db_handle
 
 ### db_handler.py
 Maintains persistence for the scoring engine to check configurations from.
+
+### scoring_engine.py
 
 ## Adding Dependencies
 In order for **build.py** to recognize new dependencies, make sure the new requirements are installable via pip, and add them to **requirements.txt** using format:
@@ -47,4 +54,4 @@ For linux distributions:
 ## Development Tips
 
 - When developing, instead of compiling the files into binaries and services, just run **sudo .venv/bin/python3.12(or latest version) src/configurator.py(or scoring_engine.py)
-- By default, 
+- Test workflow: Open configurator, add a configuration for the feature you are testing, run or ensure scoring_engine.py is running, test for all edge cases.
