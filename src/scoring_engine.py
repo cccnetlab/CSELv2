@@ -523,51 +523,58 @@ def local_group_policy(vulnerability, name):
     # ===== VALIDATION PHASE: Check if PAM configuration files are valid =====
     # If PAM configurations are invalid, no points should be awarded as the system
     # may not be enforcing the configured policies correctly.
-    # IMPORTANT: Uses SAFE, READ-ONLY validation only - no authentication attempts!
+    # Checks /var/log/auth.log for actual PAM errors logged by the system.
     
     try:
-        # Basic file validation - check for common syntax errors
-        # This is safe and won't trigger authentication or account lockouts
-        pam_files_to_check = [
-            "/etc/pam.d/common-auth",
-            "/etc/pam.d/common-password",
+        # Check /var/log/auth.log for PAM configuration errors
+        # These errors indicate that PAM encountered issues with the configuration
+        auth_log_path = "/var/log/auth.log"
+        
+        pam_error_indicators = [
+            "illegal module type",
+            "unknown module type",
+            "PAM unable to",
+            "PAM service(",
+            "PAM bad module",
+            "PAM parse error",
+            "PAM unknown option",
+            "PAM adding faulty module",
+            "PAM [error]",
+            "Module is unknown",
+            "failed to load module",
         ]
         
-        for pam_file in pam_files_to_check:
-            try:
-                with open(pam_file, 'r') as f:
-                    for line_num, line in enumerate(f, 1):
-                        line = line.strip()
-                        # Skip comments and empty lines
-                        if not line or line.startswith('#'):
-                            continue
-                        
-                        # Basic syntax check: should start with valid PAM type
-                        valid_types = ['auth', 'account', 'password', 'session']
-                        parts = line.split()
-                        if len(parts) < 2:
-                            print(f"WARNING: Invalid PAM syntax in {pam_file} line {line_num}: {line}")
-                            print(f"No local policy points will be awarded due to invalid PAM configuration.")
-                            record_miss("Local Policy")
-                            return
-                        
-                        if parts[0] not in valid_types:
-                            print(f"WARNING: Invalid PAM type in {pam_file} line {line_num}: {parts[0]}")
+        try:
+            with open(auth_log_path, 'r') as log_file:
+                # Read the last 1000 lines to check recent PAM errors
+                # (auth.log can be very large, so we don't read the entire file)
+                lines = log_file.readlines()
+                recent_lines = lines[-1000:] if len(lines) > 1000 else lines
+                
+                for line in recent_lines:
+                    line_lower = line.lower()
+                    # Check if line contains PAM error indicators
+                    for error_indicator in pam_error_indicators:
+                        if error_indicator.lower() in line_lower:
+                            print(f"WARNING: PAM configuration error detected in {auth_log_path}:")
+                            print(f"  {line.strip()}")
                             print(f"No local policy points will be awarded due to invalid PAM configuration.")
                             record_miss("Local Policy")
                             return
                             
-            except Exception as e:
-                print(f"WARNING: Could not validate {pam_file}: {e}")
-                print(f"No local policy points will be awarded due to PAM configuration issues.")
-                record_miss("Local Policy")
-                return
+        except FileNotFoundError:
+            print(f"WARNING: Could not find {auth_log_path}")
+            print("Unable to validate PAM configuration. Proceeding with caution...")
+            # Don't return here - allow scoring to continue if auth.log doesn't exist
+        except PermissionError:
+            print(f"WARNING: Permission denied reading {auth_log_path}")
+            print("Unable to validate PAM configuration. Proceeding with caution...")
+            # Don't return here - allow scoring to continue if we can't read the log
                     
     except Exception as e:
         print(f"WARNING: Unexpected error during PAM validation: {e}")
-        print("No local policy points will be awarded due to PAM validation error.")
-        record_miss("Local Policy")
-        return
+        print("Unable to validate PAM configuration. Proceeding with caution...")
+        # Don't return here - allow scoring to continue on unexpected errors
     
     # ===== PARSING PHASE: Extract settings from valid configuration files =====
     # Create a dictionary from the list of tuples for easier lookup
@@ -1087,35 +1094,110 @@ def group_manipulation(vulnerability, name):
 # TODO: Modify after properly implementing 
 def user_change_password(vulnerability):
     """
-    Checks if a user's password has been changed recently.
+    Checks if a user's password has been changed and meets password policy requirements.
+    Uses chage to verify password was recently changed, and test_password_requirements
+    to ensure system-wide password policies are enforced.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
     for vuln in vulnerability:
-        file = open("user_" + vulnerability[vuln]["User Name"].lower() + ".txt")
-        content = file.read()
-        file.close()
-        last_changed_list = (
-            re.search(r"(?<=Password last set\s{12})\S+", content).group(0).split("/")
-        )
-        last_changed = ""
-        for date in last_changed_list:
-            if int(date) < 10:
-                temp = "0" + date
-            else:
-                temp = date
-            last_changed = last_changed + temp + "/"
-        if (
-            datetime.datetime.now().strftime("%m/%d/%Y")
-            == last_changed.rsplit("/", 1)[0]
-        ):
-            record_hit(
-                vulnerability[vuln]["User Name"] + "'s password was changed.",
-                vulnerability[vuln]["Points"],
-            )
-        else:
-            record_miss("Account Management")
+        if vuln != 1:
+            username = vulnerability[vuln]["User Name"]
+            
+            # Step 1: Check if password was changed recently using chage
+            try:
+                # Get password change info for the specific user
+                result = subprocess.run(
+                    ["chage", "-l", username],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                
+                # Parse the "Last password change" line
+                for line in result.stdout.splitlines():
+                    if "Last password change" in line:
+                        # Extract date from line like "Last password change                    : Dec 16, 2025"
+                        date_part = line.split(":", 1)[1].strip()
+                        
+                        # Handle "never" case
+                        if date_part.lower() in ("never", "password must be changed"):
+                            record_miss("Account Management")
+                            continue
+                        
+                        try:
+                            # Parse the date
+                            change_date = datetime.datetime.strptime(date_part, "%b %d, %Y")
+                            today = datetime.datetime.now()
+                            
+                            # Check if password was changed today or within last 7 days
+                            days_since_change = (today - change_date).days
+                            
+                            if days_since_change <= 7:  # Changed within last week
+                                # Step 2: Verify password requirements are enforced system-wide
+                                # Get the minimum requirements that should be met
+                                requirements_to_check = {}
+                                
+                                # Build requirements dict from configured policies
+                                # Check if there are any password quality requirements configured
+                                if password_settings_content:
+                                    if 'minlen' in password_settings_content:
+                                        requirements_to_check['minlen'] = int(password_settings_content['minlen'])
+                                    if 'dcredit' in password_settings_content:
+                                        requirements_to_check['dcredit'] = int(password_settings_content['dcredit'])
+                                    if 'ucredit' in password_settings_content:
+                                        requirements_to_check['ucredit'] = int(password_settings_content['ucredit'])
+                                    if 'lcredit' in password_settings_content:
+                                        requirements_to_check['lcredit'] = int(password_settings_content['lcredit'])
+                                    if 'ocredit' in password_settings_content:
+                                        requirements_to_check['ocredit'] = int(password_settings_content['ocredit'])
+                                
+                                # If no specific requirements configured, just check if password was changed
+                                if not requirements_to_check:
+                                    record_hit(
+                                        f"{username}'s password was changed recently.",
+                                        vulnerability[vuln]["Points"],
+                                    )
+                                else:
+                                    # Test if password requirements are actually enforced
+                                    test_results = test_password_requirements(
+                                        requirements_to_check,
+                                        password_settings_content=password_settings_content,
+                                        pamd_policy_settings_content=pamd_policy_settings_content,
+                                        login_policy_settings_content=login_policy_settings_content
+                                    )
+                                    
+                                    # Check if all configured requirements are enforced
+                                    all_enforced = True
+                                    for req_key, req_result in test_results.items():
+                                        if not req_result.get('enforced', False):
+                                            all_enforced = False
+                                            break
+                                    
+                                    if all_enforced:
+                                        record_hit(
+                                            f"{username}'s password was changed and meets policy requirements.",
+                                            vulnerability[vuln]["Points"],
+                                        )
+                                    else:
+                                        # Password was changed but requirements not enforced
+                                        print(f"Warning: {username}'s password was changed but password requirements may not be enforced.")
+                                        record_miss("Account Management")
+                            else:
+                                record_miss("Account Management")
+                                
+                        except (ValueError, AttributeError) as e:
+                            print(f"Warning: Could not parse password change date for {username}: {e}")
+                            record_miss("Account Management")
+                        break  # Found the line, no need to continue
+                        
+            except subprocess.CalledProcessError as e:
+                print(f"Warning: Could not get password info for {username}: {e}")
+                record_miss("Account Management")
+            except Exception as e:
+                print(f"Error checking password for {username}: {e}")
+                record_miss("Account Management")
 
 
 # check

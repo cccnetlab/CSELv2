@@ -16,9 +16,10 @@ psutil>=5.9.0
 # PyInstaller for building binaries
 pyinstaller>=6.0.0
 
-# Note: The following must be installed via system package manager(Attempted in build.py):
+# Note: The following must be installed via system package manager (run dep_install.sh):
 # - python3-tk (for tkinter GUI support)
 # - lsb-release >=0.1.0 (system package for Linux distribution detection)
-# - libpwquality-tools (for password strength testing): run 'sudo apt-get install libpwquality-tools'
-# - pamtester (for PAM configuration testing): run 'sudo apt install pamtester'
-# Ubuntu/Debian: sudo apt-get install python3-tk lsb-release
+# - libpwquality-tools (for password strength testing tools like pwscore)
+# - libpam-pwquality (PAM module for password quality enforcement)
+# - pamtester (for PAM configuration testing)
+# Ubuntu/Debian: bash dep_install.sh

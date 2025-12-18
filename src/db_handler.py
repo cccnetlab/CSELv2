@@ -95,6 +95,14 @@ class Settings:
                 session.commit()
             else:
                 self.settings = session.query(SettingsModel).one()
+            
+            # Access each attribute to force SQLAlchemy to load them due to circumvent lazy loading.
+            _ = (self.settings.style, self.settings.desktop, self.settings.silent_mode,
+                 self.settings.server_mode, self.settings.server_name, self.settings.server_user,
+                 self.settings.server_pass, self.settings.tally_points, self.settings.tally_vuln)
+            
+            # Expunge the object from session so it becomes independent
+            session.expunge(self.settings)
         finally:
             close_session(session)
 
