@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
 
-# System packages to install
+# System packages to install (ADD MORE AS NEEDED)
 PKGS=(python3-tk libpwquality-tools pamtester python3-venv python3-pip libpam-pwquality)
 LSB_PKG=lsb-release
 

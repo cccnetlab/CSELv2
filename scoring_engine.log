@@ -1,4 +1,5 @@
 Traceback (most recent call last):
-  File "/home/jkim/Desktop/CSELv2/src/scoring_engine.py", line 2327, in <module>
-    time.sleep(15)
+  File "/home/jkim/CSELv2/src/scoring_engine.py", line 3147, in <module>
+    # Grabs VulnerabilityTemplateModel object
+    ^^^^^^^^^^^^^^
 KeyboardInterrupt

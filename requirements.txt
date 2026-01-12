@@ -16,6 +16,9 @@ psutil>=5.9.0
 # PyInstaller for building binaries
 pyinstaller>=6.0.0
 
+# File system event monitoring
+inotify-simple>=1.3.5
+
 # Note: The following must be installed via system package manager (run dep_install.sh):
 # - python3-tk (for tkinter GUI support)
 # - lsb-release >=0.1.0 (system package for Linux distribution detection)

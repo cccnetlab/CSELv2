@@ -278,7 +278,7 @@ class Categories:
         finally:
             close_session(session)
 
-
+## IMPORTANT: These are the keys for the vulnerability option tables.
 class VulnerabilityTemplateModel(base):
     """
     SQLAlchemy ORM model for vulnerability templates.
@@ -367,8 +367,11 @@ class OptionTables:
                 self.checks_list.update({name: {}})
                 for checks in checks_list:
                     chk = checks.split(":")
-                    checks_dict.update({chk[0]: chk[1]})
-                    self.checks_list[name].update({chk[0]: chk[0]})
+                    # Strip whitespace from both key and type to handle "Name:Str, Value:Int" format
+                    key = chk[0].strip()
+                    value_type = chk[1].strip()
+                    checks_dict.update({key: value_type})
+                    self.checks_list[name].update({key: key})
                 create_option_table(name, checks_dict, self.models)
             base.metadata.create_all(engine)
 

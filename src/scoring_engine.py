@@ -21,11 +21,59 @@ import configparser
 from pwd import getpwnam
 import shutil
 import warnings
+import json
+from inotify_simple import INotify, flags
 
 # Add parent directory to path for relative imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src import admin_test
 from src import db_handler
+
+### DEVELOPER TOOL ###
+""" 
+Set to True to enable developer mode features, 
+will refresh database to match configurator updates on every iteration, 
+so you can have the scoring engine running while commiting configurations.
+"""
+developerMode = True  
+########################
+
+
+# Path for storing password requirement configuration timestamps
+TIMESTAMP_FILE = "/etc/CYBERPATRIOT/password_config_timestamps.json"
+
+
+def load_config_timestamps():
+    """
+    Load password configuration timestamps from file.
+    
+    Returns:
+        dict: Dictionary mapping usernames to their requirement configuration timestamps.
+              Format: {username: {'timestamp': 'YYYY-MM-DD HH:MM:SS', 'requirements': {...}}}
+    """
+    try:
+        if os.path.exists(TIMESTAMP_FILE):
+            with open(TIMESTAMP_FILE, 'r') as f:
+                return json.load(f)
+    except (IOError, json.JSONDecodeError) as e:
+        print(f"Warning: Could not load timestamp file: {e}")
+    return {}
+
+
+def save_config_timestamps(timestamps):
+    """
+    Save password configuration timestamps to file.
+    
+    Args:
+        timestamps (dict): Dictionary mapping usernames to their timestamps.
+    """
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(TIMESTAMP_FILE), exist_ok=True)
+        with open(TIMESTAMP_FILE, 'w') as f:
+            json.dump(timestamps, f, indent=2)
+    except IOError as e:
+        print(f"Warning: Could not save timestamp file: {e}")
 
 
 # check
@@ -515,6 +563,7 @@ def local_group_policy(vulnerability, name):
     """
     Checks local group policies and records hits/misses based on their settings.
     Uses user-specified values from the vulnerability configuration.
+    First validates using /var/log/auth.log to ensure PAM configurations are valid.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
@@ -523,11 +572,9 @@ def local_group_policy(vulnerability, name):
     # ===== VALIDATION PHASE: Check if PAM configuration files are valid =====
     # If PAM configurations are invalid, no points should be awarded as the system
     # may not be enforcing the configured policies correctly.
-    # Checks /var/log/auth.log for actual PAM errors logged by the system.
+    # Actively tests PAM by triggering authentication and checking the resulting log entries.
     
     try:
-        # Check /var/log/auth.log for PAM configuration errors
-        # These errors indicate that PAM encountered issues with the configuration
         auth_log_path = "/var/log/auth.log"
         
         pam_error_indicators = [
@@ -545,23 +592,44 @@ def local_group_policy(vulnerability, name):
         ]
         
         try:
+            # Step 1: Get the current line count of auth.log before our test
             with open(auth_log_path, 'r') as log_file:
-                # Read the last 1000 lines to check recent PAM errors
-                # (auth.log can be very large, so we don't read the entire file)
-                lines = log_file.readlines()
-                recent_lines = lines[-1000:] if len(lines) > 1000 else lines
-                
-                for line in recent_lines:
-                    line_lower = line.lower()
-                    # Check if line contains PAM error indicators
-                    for error_indicator in pam_error_indicators:
-                        if error_indicator.lower() in line_lower:
-                            print(f"WARNING: PAM configuration error detected in {auth_log_path}:")
-                            print(f"  {line.strip()}")
-                            print(f"No local policy points will be awarded due to invalid PAM configuration.")
-                            record_miss("Local Policy")
-                            return
-                            
+                initial_lines = log_file.readlines()
+                initial_line_count = len(initial_lines)
+            
+            # Step 2: Trigger PAM validation with a harmless command
+            # Using 'sudo -n true' which:
+            # - Tests sudo authentication without prompting for password (-n = non-interactive)
+            # - Runs 'true' command (does nothing, always succeeds)
+            # - Will fail with exit code 1 if password required, but still triggers PAM
+            # - Causes PAM to process the auth stack and log any errors
+            subprocess.run(
+                ["sudo", "-n", "true"],
+                capture_output=True,
+                text=True,
+                check=False  # Don't raise exception on non-zero exit (expected if password required)
+            )
+            
+            # Give the system a moment to write to the log
+            import time
+            time.sleep(0.1)
+            
+            # Step 3: Read only the NEW lines added after our command
+            with open(auth_log_path, 'r') as log_file:
+                all_lines = log_file.readlines()
+                new_lines = all_lines[initial_line_count:]  # Only lines added after our test
+            
+            # Step 4: Check the new lines for PAM errors
+            for line in new_lines:
+                line_lower = line.lower()
+                for error_indicator in pam_error_indicators:
+                    if error_indicator.lower() in line_lower:
+                        print(f"WARNING: PAM configuration error detected during authentication test:")
+                        print(f"  {line.strip()}")
+                        print(f"No local policy points will be awarded due to invalid PAM configuration.")
+                        record_miss("Local Policy")
+                        return
+                        
         except FileNotFoundError:
             print(f"WARNING: Could not find {auth_log_path}")
             print("Unable to validate PAM configuration. Proceeding with caution...")
@@ -613,8 +681,7 @@ def local_group_policy(vulnerability, name):
                         if unlock_match:
                             pam_settings_dict['unlock_time'] = unlock_match.group(1)
                     except Exception as e:
-                        print(f"Error parsing unlock_time: {e}")
-                        
+                        print
                 if 'deny=' in options:
                     try:
                         deny_match = re.search(r'deny=(\d+)', options)
@@ -667,7 +734,6 @@ def local_group_policy(vulnerability, name):
                         print(f"Error parsing deny from common-auth: {e}")
     
     # Attempts to match the policy name and check its value, then records hits/misses
-    # TODO: Check functionality for all cases
     try:
         match name:
             case "Minimum Password Age":
@@ -762,7 +828,7 @@ def local_group_policy(vulnerability, name):
                     minlen_result = test_results.get('minlen', {})
                     configured = minlen_result.get('configured', False)
                     enforced = minlen_result.get('enforced', False)
-                    actual_value = minlen_result.get('actual_value', 0)
+                    actual_value = minlen_result.get('actual_value', 0);
                     
                     # Check if the actual configured value matches the expected value
                     if configured and actual_value == expected_value:
@@ -998,7 +1064,7 @@ def local_group_policy(vulnerability, name):
 
 
             case "Check Kernel":
-                print("TODO: Implement check Kernel")
+                check_kernel(vulnerability)
 
             case _:
                 # Handle unknown policy names
@@ -1091,106 +1157,346 @@ def group_manipulation(vulnerability, name):
                         )
 
 
-# TODO: Modify after properly implementing 
+def build_password_requirements_cache(categories, vulnerabilities_obj):
+    """
+    Builds a dictionary of password requirements from vulnerability configurations.
+    Scans all categories to find password policy vulnerabilities and extracts their values.
+    
+    Args:
+        categories (list): List of category objects from database.
+        vulnerabilities_obj: The OptionTables object to query vulnerabilities.
+    
+    Returns:
+        dict: Dictionary mapping requirement keys (e.g., 'minlen') to their configured values.
+    """
+    password_requirement_mapping = { # DEVNOTE: Add more if creating new password requirements in future.
+        "Minimum Password Length": "minlen",
+        # Add more mappings here as needed in the future:
+        # "Password Complexity": "complexity",
+        # "Minimum Uppercase Letters": "ucredit",
+        # "Minimum Lowercase Letters": "lcredit",
+        # etc.
+    }
+    requirements = {}
+    
+    for category in categories:
+        # Get vulnerability templates for this category
+        vuln_templates = vulnerabilities_obj.get_option_template_by_category(category.id)
+        # vuln_templates is a list of VulnerabilityTemplateModel objects
+        for template in vuln_templates:
+            vuln_name = template.name  # This is the vulnerability name like "Minimum Password Length"
+            
+            # Check if this vulnerability is a password requirement we want to test
+            if vuln_name in password_requirement_mapping:
+                # Get the actual configured instances for this vulnerability
+                try:
+                    option_table = vulnerabilities_obj.get_option_table(vuln_name, config=False)
+                    
+                    # option_table is a dict indexed by instance ID
+                    # For policy vulnerabilities, the data is always in entry 1(just a safety measure check)
+                    if 1 in option_table: 
+                        instance_data = option_table[1]
+                        # Check if enabled and has a configured value
+                        if instance_data.get("Enabled", False):
+                            requirement_value = instance_data.get("Value", 0)
+                            
+                            # Only add if value is configured (non-zero)
+                            if requirement_value and int(requirement_value) > 0:
+                                requirement_key = password_requirement_mapping[vuln_name]
+                                requirements[requirement_key] = int(requirement_value)
+                except Exception as e:
+                    # If there's an error getting the option table, skip this vulnerability
+                    print(f"Warning: Could not get option table for {vuln_name}: {e}")
+                    continue
+    
+    return requirements
+
+
+def get_password_hash(username):
+    """
+    Get the current password hash for a user from /etc/shadow.
+    Used for efficient change detection without re-validating if hash unchanged.
+    
+    Args:
+        username (str): The username to lookup.
+    
+    Returns:
+        str: The password hash (second field from /etc/shadow), or None if not found.
+    """
+    try:
+        with open('/etc/shadow', 'r') as f:
+            for line in f:
+                if line.startswith(username + ':'):
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        return parts[1]  # Password hash field
+    except (PermissionError, FileNotFoundError) as e:
+        print(f"Warning: Could not read /etc/shadow: {e}")
+    return None
+
+# Deprecated
+def get_precise_password_change_time(username):
+    """
+    Get the most recent precise password change time for a user from auth.log.
+    Searches auth logs for password change events with precise timestamps.
+    Handles both ISO 8601 format (systemd) and traditional syslog format.
+    
+    CRITICAL: PAM may log "password changed" even when the change was rejected by pwquality.
+    This function cross-references the timestamp with the actual password hash to verify
+    the password was truly changed. Uses the timestamp from auth.log but relies on the
+    calling function to validate the hash actually changed.
+    
+    Args:
+        username (str): The username to search for.
+    
+    Returns:
+        datetime object with precise timestamp, or None if not found in logs.
+        Note: Caller must verify the password hash actually changed to confirm validity.
+    """
+    log_files = ['/var/log/auth.log', '/var/log/auth.log.1']  # Check current and rotated log
+    
+    for log_file in log_files:
+        try:
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+            
+            # Search backwards (most recent first)
+            for line in reversed(lines):
+                if f"password changed for {username}" in line:
+                    print(f"DEBUG: Found password change log line: {line.strip()}")
+                    
+                    # Parse timestamp - try ISO 8601 format first (systemd journal format)
+                    # Format: 2026-01-07T12:54:31.696514-08:00 hostname ...
+                    parts = line.split()
+                    if len(parts) >= 1:
+                        timestamp_str = parts[0]
+                        
+                        # Try ISO 8601 format with timezone and microseconds
+                        try:
+                            # Remove timezone offset for simpler parsing (just keep local time)
+                            # Format: 2026-01-07T12:54:31.696514-08:00
+                            if 'T' in timestamp_str:
+                                # Split off timezone if present
+                                if '+' in timestamp_str or timestamp_str.count('-') > 2:
+                                    # Find the last + or - which indicates timezone
+                                    for tz_sep in ['+', '-']:
+                                        if tz_sep in timestamp_str[10:]:  # After date part
+                                            timestamp_str = timestamp_str.rsplit(tz_sep, 1)[0]
+                                            break
+                                
+                                # Now parse: 2026-01-07T12:54:31.696514 or 2026-01-07T12:54:31
+                                if '.' in timestamp_str:
+                                    # Has microseconds
+                                    dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S.%f")
+                                else:
+                                    # No microseconds
+                                    dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S")
+                                
+                                print(f"DEBUG: Successfully parsed ISO timestamp: {dt}")
+                                return dt
+                        except ValueError as e:
+                            print(f"DEBUG: Could not parse as ISO format: {e}")
+                        
+                        # Try traditional syslog format: Dec 19 14:23:45
+                        try:
+                            if len(parts) >= 3:
+                                month = parts[0]
+                                day = parts[1]
+                                time_str = parts[2]
+                                
+                                current_year = datetime.datetime.now().year
+                                timestamp_str = f"{month} {day} {current_year} {time_str}"
+                                
+                                dt = datetime.datetime.strptime(timestamp_str, "%b %d %Y %H:%M:%S")
+                                print(f"DEBUG: Successfully parsed syslog timestamp: {dt}")
+                                return dt
+                        except ValueError as e:
+                            print(f"DEBUG: Could not parse as syslog format: {e}")
+                            continue
+                            
+        except (FileNotFoundError, PermissionError) as e:
+            print(f"Warning: Could not read {log_file}: {e}")
+            continue
+    
+    return None
+
+
 def user_change_password(vulnerability):
     """
     Checks if a user's password has been changed and meets password policy requirements.
-    Uses chage to verify password was recently changed, and test_password_requirements
+    Uses auth.log to get precise password change time, and test_password_requirements
     to ensure system-wide password policies are enforced.
+    
+    Uses the global password_requirements_cache which is populated in the main loop
+    by scanning all vulnerability categories for password policy requirements.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
+    # Ensure enforce_for_root is set in pwquality.conf to apply rules to root user
+    # This ensures passwords must meet all requirements when changed, even for root
+    pwquality_conf_path = "/etc/security/pwquality.conf"
+    try:
+        # Read the current configuration
+        with open(pwquality_conf_path, "r") as f:
+            lines = f.readlines()
+        
+        # Check if enforce_for_root line exists
+        has_enforce_for_root = False
+        modified = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Check for enforce_for_root (with or without leading comment)
+            if stripped.startswith("enforce_for_root") or stripped.startswith("# enforce_for_root"):
+                has_enforce_for_root = True
+                # If it's commented out or not set correctly, fix it
+                if not stripped.startswith("enforce_for_root") or "DO_NOT_REMOVE" not in line:
+                    lines[i] = "enforce_for_root  # DO_NOT_REMOVE\n"
+                    modified = True
+                break
+        
+        # Add enforce_for_root if it doesn't exist
+        if not has_enforce_for_root:
+            lines.append("enforce_for_root  # DO_NOT_REMOVE\n")
+            modified = True
+        
+        # Write back to the file if modified
+        if modified:
+            with open(pwquality_conf_path, "w") as f:
+                f.writelines(lines)
+            print(f"INFO: Added/updated 'enforce_for_root' in {pwquality_conf_path}")
+    except (IOError, PermissionError) as e:
+        print(f"Warning: Could not modify {pwquality_conf_path}: {e}")
+    
+    # Ensure enforce_for_root is added to pam_pwquality.so line in common-password
+    # Also ensure pam_pwquality.so is the FIRST password module to prevent bypass
+    common_password_path = "/etc/pam.d/common-password"
+    try:
+        with open(common_password_path, "r") as f:
+            pam_lines = f.readlines()
+        
+        pam_modified = False
+        pwquality_line_index = -1
+        first_password_module_index = -1
+        
+        # First pass: find pam_pwquality.so line and first password module
+        for i, line in enumerate(pam_lines):
+            stripped = line.strip()
+            # Skip comments and empty lines
+            if not stripped or stripped.startswith("#"):
+                continue
+            
+            # Check if this is a password module line
+            if stripped.startswith("password"):
+                if first_password_module_index == -1:
+                    first_password_module_index = i
+                
+                # Check if this is the pam_pwquality.so line
+                if "pam_pwquality.so" in line:
+                    pwquality_line_index = i
+                    # Ensure enforce_for_root is present
+                    if "enforce_for_root" not in line:
+                        pam_lines[i] = line.rstrip() + " enforce_for_root\n"
+                        pam_modified = True
+                    break
+        
+        # Second pass: if pam_pwquality.so exists but is not first, move it to the top
+        if pwquality_line_index != -1 and first_password_module_index != -1:
+            if pwquality_line_index != first_password_module_index:
+                # Remove the pwquality line from its current position
+                pwquality_line = pam_lines.pop(pwquality_line_index)
+                # Insert it at the first password module position
+                pam_lines.insert(first_password_module_index, pwquality_line)
+                pam_modified = True
+                print(f"INFO: Moved pam_pwquality.so to top of password module stack in {common_password_path}")
+        
+        if pam_modified:
+            with open(common_password_path, "w") as f:
+                f.writelines(pam_lines)
+            if not (pwquality_line_index != -1 and pwquality_line_index != first_password_module_index):
+                print(f"INFO: Added 'enforce_for_root' to pam_pwquality.so in {common_password_path}")
+    except (IOError, PermissionError) as e:
+        print(f"Warning: Could not modify {common_password_path}: {e}")
+    
+    # Use the global cache built in the main loop
+    global password_requirements_cache
+    requirements_to_check = password_requirements_cache.copy()
+    
     for vuln in vulnerability:
         if vuln != 1:
             username = vulnerability[vuln]["User Name"]
             
-            # Step 1: Check if password was changed recently using chage
+            # Step 1: Detect password hash change and record timestamp
+            # Get current hash and compare with stored hash to detect changes
             try:
-                # Get password change info for the specific user
-                result = subprocess.run(
-                    ["chage", "-l", username],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
+                current_hash = get_password_hash(username)
                 
-                # Parse the "Last password change" line
-                for line in result.stdout.splitlines():
-                    if "Last password change" in line:
-                        # Extract date from line like "Last password change                    : Dec 16, 2025"
-                        date_part = line.split(":", 1)[1].strip()
-                        
-                        # Handle "never" case
-                        if date_part.lower() in ("never", "password must be changed"):
-                            record_miss("Account Management")
-                            continue
-                        
-                        try:
-                            # Parse the date
-                            change_date = datetime.datetime.strptime(date_part, "%b %d, %Y")
-                            today = datetime.datetime.now()
+                # Load stored timestamps and hashes
+                config_timestamps = load_config_timestamps()
+                stored_data = config_timestamps.get(username, {})
+                stored_hash = stored_data.get('validated_hash')
+                stored_timestamp = stored_data.get('password_change_timestamp')
+                
+                # Check if hash has changed since last check
+                password_change_timestamp = None
+                if stored_hash and current_hash and stored_hash != current_hash:
+                    # Hash changed! Record the current time as password change time
+                    password_change_timestamp = datetime.datetime.now()
+                    # Update the stored hash and timestamp
+                    stored_data['validated_hash'] = current_hash
+                    stored_data['password_change_timestamp'] = password_change_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                    config_timestamps[username] = stored_data
+                    save_config_timestamps(config_timestamps)
+                elif stored_timestamp:
+                    # Hash hasn't changed, but we have a previous timestamp - use it
+                    try:
+                        password_change_timestamp = datetime.datetime.strptime(stored_timestamp, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        pass
+                elif not stored_hash and current_hash:
+                    # First time checking this user - store the current hash but no timestamp yet
+                    stored_data['validated_hash'] = current_hash
+                    config_timestamps[username] = stored_data
+                    save_config_timestamps(config_timestamps)
+                
+                # If we have a timestamp, check if it's recent and validate requirements
+                if password_change_timestamp:
+                    today = datetime.datetime.now()
+                    time_since_change = today - password_change_timestamp
+                    
+                    # Check if password was changed within last 7 days
+                    if time_since_change.days <= 7:
+                        # Step 2: Verify password requirements and timestamp tracking
+                        # Only test if we have requirements configured
+                        if requirements_to_check:
+                            test_results = test_password_requirements(
+                                requirements_to_check,
+                                password_settings_content=password_settings_content,
+                                pamd_policy_settings_content=pamd_policy_settings_content,
+                                login_policy_settings_content=login_policy_settings_content,
+                                username_to_test=username,
+                                password_change_date=password_change_timestamp
+                            )
                             
-                            # Check if password was changed today or within last 7 days
-                            days_since_change = (today - change_date).days
-                            
-                            if days_since_change <= 7:  # Changed within last week
-                                # Step 2: Verify password requirements are enforced system-wide
-                                # Get the minimum requirements that should be met
-                                requirements_to_check = {}
-                                
-                                # Build requirements dict from configured policies
-                                # Check if there are any password quality requirements configured
-                                if password_settings_content:
-                                    if 'minlen' in password_settings_content:
-                                        requirements_to_check['minlen'] = int(password_settings_content['minlen'])
-                                    if 'dcredit' in password_settings_content:
-                                        requirements_to_check['dcredit'] = int(password_settings_content['dcredit'])
-                                    if 'ucredit' in password_settings_content:
-                                        requirements_to_check['ucredit'] = int(password_settings_content['ucredit'])
-                                    if 'lcredit' in password_settings_content:
-                                        requirements_to_check['lcredit'] = int(password_settings_content['lcredit'])
-                                    if 'ocredit' in password_settings_content:
-                                        requirements_to_check['ocredit'] = int(password_settings_content['ocredit'])
-                                
-                                # If no specific requirements configured, just check if password was changed
-                                if not requirements_to_check:
-                                    record_hit(
-                                        f"{username}'s password was changed recently.",
-                                        vulnerability[vuln]["Points"],
-                                    )
-                                else:
-                                    # Test if password requirements are actually enforced
-                                    test_results = test_password_requirements(
-                                        requirements_to_check,
-                                        password_settings_content=password_settings_content,
-                                        pamd_policy_settings_content=pamd_policy_settings_content,
-                                        login_policy_settings_content=login_policy_settings_content
-                                    )
-                                    
-                                    # Check if all configured requirements are enforced
-                                    all_enforced = True
-                                    for req_key, req_result in test_results.items():
-                                        if not req_result.get('enforced', False):
-                                            all_enforced = False
-                                            break
-                                    
-                                    if all_enforced:
-                                        record_hit(
-                                            f"{username}'s password was changed and meets policy requirements.",
-                                            vulnerability[vuln]["Points"],
-                                        )
-                                    else:
-                                        # Password was changed but requirements not enforced
-                                        print(f"Warning: {username}'s password was changed but password requirements may not be enforced.")
-                                        record_miss("Account Management")
+                            # Check if password passes based on timestamp validation
+                            if test_results.get('password_passes', False):
+                                record_hit(
+                                    f"{username}'s password was changed after requirements were configured.",
+                                    vulnerability[vuln]["Points"],
+                                )
                             else:
                                 record_miss("Account Management")
-                                
-                        except (ValueError, AttributeError) as e:
-                            print(f"Warning: Could not parse password change date for {username}: {e}")
-                            record_miss("Account Management")
-                        break  # Found the line, no need to continue
+                        else:
+                            # No password requirements configured, just check if password was changed
+                            record_hit(
+                                f"{username}'s password was changed.",
+                                vulnerability[vuln]["Points"],
+                            )
+                    else:
+                        record_miss("Account Management")
+                else:
+                    # Could not determine password change time
+                    record_miss("Account Management")
                         
             except subprocess.CalledProcessError as e:
                 print(f"Warning: Could not get password info for {username}: {e}")
@@ -1342,48 +1648,132 @@ def check_hosts(vulnerability):
 def critical_services(vulnerability):
     """
     Checks for critical services and records penalties if their state has changed.
+    Awards penalty if service state OR start mode differs from configured values.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
     for vuln in vulnerability:
         if vuln != 1:
-            name = vulnerability[vuln]["Service Name"]
-            if (
-                name in services_content["unit"]
-                and vulnerability[vuln]["Service State"] == services_content["active"]
-            ):
-                record_penalty(name + " was changed.", vulnerability[vuln]["Points"])
+            service_name = vulnerability[vuln]["Service Name"]
+            expected_state = vulnerability[vuln]["Service State"]
+            expected_start_mode = vulnerability[vuln]["Service Start Mode"]
+            print("DEBUG: found service to check:", service_name, expected_state, expected_start_mode)
+            # Ensure service name has .service extension
+            if not service_name.endswith(".service"):
+                service_name_full = service_name + ".service"
+            else:
+                service_name_full = service_name
+            
+            # Find the service in services_content list
+            for service in services_content:     
+                # Check for exact match of base names
+                if service_name_full == service["unit"]:
+                    actual_state = service["active"]
+                    print("DEBUG: actual state for", service["unit"], "is", actual_state)
+                    # Get the service start mode
+                    try:
+                        result = subprocess.run(
+                            ["systemctl", "is-enabled", service["unit"]],
+                            capture_output=True,
+                            text=True,
+                            check=False
+                        )
+                        actual_start_mode = result.stdout.strip()
+                    except Exception as e:
+                        print(f"Warning: Could not check start mode for {service['unit']}: {e}")
+                        actual_start_mode = "unknown"
+                    
+                    # Penalize if either state or start mode changed
+                    if actual_state != expected_state or actual_start_mode != expected_start_mode:
+                        record_penalty(
+                            f"{service_name} was changed from {expected_state}/{expected_start_mode}",
+                            vulnerability[vuln]["Points"]
+                        )
+                    break
 
 
 # fix
 def manage_services(vulnerability):
     """
     Checks the state of services and records hits/misses based on their status.
+    Checks both service state (active/inactive) and start mode (enabled/disabled/masked).
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
     for vuln in vulnerability:
         if vuln != 1:
-            name = vulnerability[vuln]["Service Name"]
-            if name in services_content:
-                if (
-                    name in services_content["unit"]
-                    and vulnerability[vuln]["Service State"]
-                    == services_content["active"]
-                ):
+            service_name = vulnerability[vuln]["Service Name"]
+            expected_state = vulnerability[vuln]["Service State"]  # "active" or "inactive"
+            expected_start_mode = vulnerability[vuln]["Service Start Mode"]  # "enabled", "disabled", "masked"
+            
+            # Ensure service name has .service extension
+            if not service_name.endswith(".service"):
+                service_name_full = service_name + ".service"
+            else:
+                service_name_full = service_name
+            
+            # Use systemctl status to check if service exists and get its state
+            try:
+                status_result = subprocess.run(
+                    ["systemctl", "status", service_name_full],
+                    capture_output=True,
+                    text=True,
+                    check=False  # Don't raise on non-zero exit (service might be inactive)
+                )
+                
+                # Parse the status output to determine actual state
+                status_output = status_result.stdout.lower()
+                
+                # Check if service exists (systemctl status returns specific error if not found)
+                if "could not be found" in status_output or "not loaded" in status_output:
+                    print(f"DEBUG: Service {service_name} not found")
+                    record_miss("Program Management")
+                    continue
+                
+                # Determine actual state from status output
+                if "active (running)" in status_output or "active (exited)" in status_output:
+                    actual_state = "active"
+                elif "inactive (dead)" in status_output:
+                    actual_state = "inactive"
+                elif "failed" in status_output:
+                    actual_state = "failed"
+                else:
+                    actual_state = "unknown"
+                
+                # Get the service start mode using systemctl is-enabled
+                try:
+                    enabled_result = subprocess.run(
+                        ["systemctl", "is-enabled", service_name_full],
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    actual_start_mode = enabled_result.stdout.strip()  # "enabled", "disabled", "masked", etc.
+                except Exception as e:
+                    print(f"Warning: Could not check start mode for {service_name_full}: {e}")
+                    actual_start_mode = "unknown"
+                
+                # Check if both state and start mode match
+                state_matches = (actual_state == expected_state)
+                start_mode_matches = (actual_start_mode == expected_start_mode)
+                
+                if state_matches and start_mode_matches:
                     record_hit(
-                        name
-                        + " has been "
-                        + vulnerability[vuln]["Service State"]
-                        + " and set to "
-                        + vulnerability[vuln]["Service Start Mode"],
+                        f"{service_name} is {expected_state} and set to {expected_start_mode}",
                         vulnerability[vuln]["Points"],
                     )
                 else:
+                    if not state_matches:
+                        print(f"DEBUG: {service_name} state mismatch - expected: {expected_state}, actual: {actual_state}")
+                    if not start_mode_matches:
+                        print(f"DEBUG: {service_name} start mode mismatch - expected: {expected_start_mode}, actual: {actual_start_mode}")
                     record_miss("Program Management")
-
+                    
+            except Exception as e:
+                print(f"ERROR: Could not check service {service_name}: {e}")
+                record_miss("Program Management")
 
 def disable_SSH_Root_Login(vulnerability):
     """
@@ -1409,19 +1799,225 @@ def disable_SSH_Root_Login(vulnerability):
 
     record_miss("Local Policy")
 
-
-def check_kernel(Vulnerability):
+def is_kernel_running(expected_version, running_kernel):
     """
-    Checks the kernel version against the expected version and records hits/misses.
+    Helper function to check if the expected kernel version is currently running.
     
     Args:
-        Vulnerability (str): The expected kernel version.
+        expected_version (str): Expected kernel version (e.g., "5.15.0-92")
+        running_kernel (str): Currently running kernel from uname (e.g., "5.15.0-92-generic")
+    
+    Returns:
+        bool: True if running kernel matches expected version, False otherwise
     """
-    kernel_version = platform.uname().release
-    print("Kernel Version:", kernel_version)
-    if Vulnerability is kernel_version:
-        record_hit("Kernel is current version", Vulnerability[1]["Points"])
-    else:
+    import re
+    
+    # Extract version numbers from both strings for comparison
+    # Expected: "5.15.0-92" -> [5, 15, 0, 92]
+    # Running: "5.15.0-92-generic" -> [5, 15, 0, 92]
+    expected_nums = [int(n) for n in re.findall(r'\d+', expected_version)]
+    running_nums = [int(n) for n in re.findall(r'\d+', running_kernel)]
+    
+    # Compare the first 4 version numbers (major.minor.patch-build)
+    # Ignore any trailing numbers (like architecture variants)
+    if len(expected_nums) >= 4 and len(running_nums) >= 4:
+        return expected_nums[:4] == running_nums[:4]
+    
+    # Fallback: simple substring match
+    return expected_version in running_kernel
+
+
+def check_kernel(vulnerability):
+    """
+    Checks if the system kernel has been updated to the latest available version
+    and is currently running. Handles both standard and HWE kernel tracks.
+    Requires internet access to query repositories.
+    """
+    import subprocess
+    import re
+    
+    try:
+        # Step 1: Get the currently running kernel
+        running_kernel = platform.uname().release
+        print(f"Running kernel: {running_kernel}")
+        
+        # Step 1.5: Detect Ubuntu base version (important for derivatives like Mint)
+        ubuntu_version = None
+        ubuntu_codename = None
+        try:
+            # Get both VERSION_ID and UBUNTU_CODENAME from /etc/os-release
+            with open('/etc/os-release', 'r') as f:
+                for line in f:
+                    if line.startswith('UBUNTU_CODENAME='):
+                        # For Ubuntu-based distros like Mint, use UBUNTU_CODENAME
+                        ubuntu_codename = line.split('=')[1].strip().strip('"')
+                    elif line.startswith('VERSION_ID=') and not ubuntu_version:
+                        # Fallback to VERSION_ID if no UBUNTU_CODENAME
+                        version_id = line.split('=')[1].strip().strip('"')
+                        # Only use if it looks like Ubuntu version (X.XX format)
+                        if '.' in version_id and len(version_id) <= 5:
+                            ubuntu_version = version_id
+            
+            # Map Ubuntu codenames to version numbers (for HWE package naming)
+            ## DEVNOTE: This mapping may need to be updated for future releases, and is needed because linux mint is weird.
+            codename_to_version = {
+                'noble': '24.04',
+                'mantic': '23.10',
+                'lunar': '23.04',
+                'jammy': '22.04',
+                'focal': '20.04',
+                'bionic': '18.04',
+                'xenial': '16.04',
+            }
+            
+            # Prefer UBUNTU_CODENAME mapping, fallback to VERSION_ID
+            if ubuntu_codename and ubuntu_codename in codename_to_version:
+                ubuntu_version = codename_to_version[ubuntu_codename]
+                print(f"Detected Ubuntu base: {ubuntu_version} (codename: {ubuntu_codename})")
+            elif ubuntu_version:
+                print(f"Detected Ubuntu version: {ubuntu_version}")
+            else:
+                print("Warning: Could not determine Ubuntu version")
+                
+        except FileNotFoundError:
+            print("Warning: Could not detect Ubuntu version from /etc/os-release")
+        
+        # Step 2: Detect if system uses HWE kernel or standard kernel
+        # Check which meta-package is installed
+        hwe_package_name = None
+        uses_hwe = False
+        
+        if ubuntu_version:
+            # Try version-specific HWE package first
+            hwe_package_name = f"linux-image-generic-hwe-{ubuntu_version}"
+            hwe_check = subprocess.run(
+                ["dpkg", "-l", hwe_package_name],
+                capture_output=True,
+                text=True
+            )
+            
+            if hwe_check.returncode == 0:
+                for line in hwe_check.stdout.splitlines():
+                    if line.startswith("ii"):
+                        uses_hwe = True
+                        break
+        # If version-specific HWE not found, try generic HWE package
+        if not uses_hwe:
+            hwe_package_name = "linux-image-generic-hwe"
+            hwe_check = subprocess.run(
+                ["dpkg", "-l", hwe_package_name],
+                capture_output=True,
+                text=True
+            )
+            
+            if hwe_check.returncode == 0:
+                for line in hwe_check.stdout.splitlines():
+                    if line.startswith("ii"):
+                        uses_hwe = True
+                        break
+        
+        # Determine which meta-package to query
+        if uses_hwe:
+            meta_package = hwe_package_name
+            print(f"System uses HWE kernel track: {meta_package}")
+        else:
+            meta_package = "linux-image-generic"
+            print("System uses standard kernel track")
+        
+        # Step 3: Query apt cache for latest available kernel version
+        print(f"Querying repositories for latest {meta_package} version...")
+        apt_result = subprocess.run(
+            ["apt-cache", "policy", meta_package],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        # Parse the "Candidate" line which shows the latest available version
+        latest_available_version = None
+        for line in apt_result.stdout.splitlines():
+            if "Candidate:" in line:
+                latest_available_version = line.split("Candidate:")[1].strip()
+                break
+        
+        if not latest_available_version or latest_available_version == "(none)":
+            print("ERROR: Could not determine latest available kernel version")
+            print("Ensure internet connection is available and 'sudo apt update' has been run")
+            record_miss("Local Policy")
+            return
+        
+        print(f"Latest available kernel meta-package version: {latest_available_version}")
+        
+        # Step 4: Determine the actual kernel image package version from the meta-package
+        depends_result = subprocess.run(
+            ["apt-cache", "depends", meta_package],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        # Find the "Depends: linux-image-X.X.X-XX-generic" line
+        latest_kernel_image = None
+        for line in depends_result.stdout.splitlines():
+            if "Depends:" in line and "linux-image-" in line:
+                match = re.search(r'linux-image-[\d\.]+-\d+-\w+', line)
+                if match:
+                    latest_kernel_image = match.group(0)
+                    break
+        
+        if not latest_kernel_image:
+            print("ERROR: Could not determine latest kernel image package")
+            record_miss("Local Policy")
+            return
+        
+        # Extract version from package name
+        latest_kernel_version = latest_kernel_image.replace("linux-image-", "").replace("-generic", "")
+        print(f"Latest available kernel version: {latest_kernel_version}")
+        
+        # Step 5: Check if the latest kernel package is installed
+        installed_check = subprocess.run(
+            ["dpkg", "-l", latest_kernel_image],
+            capture_output=True,
+            text=True
+        )
+        
+        is_installed = False
+        if installed_check.returncode == 0:
+            for line in installed_check.stdout.splitlines():
+                if line.startswith("ii") and latest_kernel_image in line:
+                    is_installed = True
+                    break
+        
+        if not is_installed:
+            print(f"Latest kernel {latest_kernel_image} is NOT installed")
+            print(f"Run 'sudo apt update && sudo apt upgrade' to install")
+            record_miss("Local Policy")
+            return
+        
+        print(f"Latest kernel {latest_kernel_image} is installed ✓")
+        
+        # Step 6: Check if the installed latest kernel is actually running
+        if not is_kernel_running(latest_kernel_version, running_kernel):
+            print(f"Latest kernel {latest_kernel_version} is installed but NOT running")
+            print(f"Currently running: {running_kernel}")
+            print("Reboot required to load the new kernel")
+            record_miss("Local Policy")
+            return
+        
+        # Step 7: Success - latest kernel is both installed and running
+        print(f"✓ Kernel updated to latest version and running: {running_kernel}")
+        record_hit(
+            f"Kernel updated to latest version ({running_kernel})",
+            vulnerability[1]["Points"]
+        )
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Error checking kernel (ensure internet connection and apt cache is updated): {e}")
+        record_miss("Local Policy")
+    except Exception as e:
+        print(f"Unexpected error in check_kernel: {e}")
+        import traceback
+        traceback.print_exc()
         record_miss("Local Policy")
 
 
@@ -1457,11 +2053,23 @@ def programs(vulnerability, name):
         case "Update Program":
             for vuln in vulnerability:
                 if vuln != 1:
-                    if vulnerability[vuln]["Version"] not in program_versions:
+                    program_name = vulnerability[vuln]["Program Name"]
+                    expected_version = vulnerability[vuln]["Version"]
+                    
+                    # Find the package in program_versions list
+                    package_found = False
+                    version_matches = False
+                    
+                    for package in program_versions:
+                        if package["name"] == program_name:
+                            package_found = True
+                            if package["version"] == expected_version:
+                                version_matches = True
+                            break
+                    
+                    if package_found and version_matches:
                         record_hit(
-                            vulnerability[vuln]["Version"]
-                            + " version of "
-                            + vulnerability[vuln]["Program Name"],
+                            program_name + " updated to version " + expected_version,
                             vulnerability[vuln]["Points"],
                         )
                     else:
@@ -1470,21 +2078,18 @@ def programs(vulnerability, name):
 
 def critical_programs(vulnerability):
     """
-    Checks for critical programs and records hits/misses based on their installation status.
+    Checks for critical programs and records penalties if they are removed.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
     for vuln in vulnerability:
         if vuln != 1:
-            if vulnerability[vuln]["Program Name"] not in program_content:
-                record_hit(
-                    vulnerability[vuln]["Program Name"] + " is not installed",
-                    vulnerability[vuln]["Points"],
-                )
-            else:
+            program_name = vulnerability[vuln]["Program Name"]
+            # Penalize if critical program has been removed
+            if program_name not in program_content:
                 record_penalty(
-                    vulnerability[vuln]["Program Name"] + " is not installed",
+                    f"Critical program {program_name} was removed",
                     vulnerability[vuln]["Points"],
                 )
 
@@ -1590,6 +2195,8 @@ def load_policy_settings():
         if not line.startswith("#") and line: # Ignore comments and empty lines
             key, value = line.split()
             login_defs_list.append((key, value))
+
+
 
     # Load /etc/pam.d/common-password settings
     pamd_defs_list = []
@@ -1801,10 +2408,10 @@ def get_faillock_info(username="root"):
         return {}
 
 
-def test_password_requirements(requirements, password_settings_content=None, pamd_policy_settings_content=None, login_policy_settings_content=None, password_to_test=None):
+def test_password_requirements(requirements, password_settings_content=None, pamd_policy_settings_content=None, login_policy_settings_content=None, username_to_test=None, password_change_date=None):
     """
     Tests password requirements using pwscore/pwmake to verify they're actually enforced.
-    Generates test passwords that should pass/fail based on requirements, OR tests a provided password.
+    Tracks when requirements are first fully configured and compares with password change date.
     
     Args:
         requirements (dict): Dictionary of password requirements to test.
@@ -1812,17 +2419,22 @@ def test_password_requirements(requirements, password_settings_content=None, pam
         password_settings_content (dict): Password settings from /etc/security/pwquality.conf
         pamd_policy_settings_content (list): PAM password lines from /etc/pam.d/common-password
         login_policy_settings_content (list): Key-value pairs from /etc/login.defs
-        password_to_test (str): Optional password to test against requirements. If provided,
-                               the function will check this password instead of generating test passwords.
+        username_to_test (str): Username to track configuration timestamps for.
+        password_change_date (datetime): Date when the user's password was changed.
     
     Returns:
         dict: Results dictionary with keys for each requirement tested.
               Format: {
-                  'minlen': {'configured': True/False, 'enforced': True/False, 'actual_value': int, 'password_passes': True/False},
+                  'minlen': {'configured': True/False, 'enforced': True/False, 'actual_value': int},
                   'dcredit': {...},
-                  ...
+                  ...,
+                  'password_passes': True/False  # Only present if username_to_test is provided
               }
-              If password_to_test is provided, 'password_passes' indicates if the password meets the expected requirement.
+              Keys:
+                configured: Indicates if the requirement is configured as expected in the configurator.
+                enforced: Indicates if the requirement is actually enforced by the system(not just configured, useful for changing standards).
+                actual_value: The actual value found in system configuration.
+                password_passes: If username_to_test is provided, indicates if password was changed after all requirements were configured.
     """
     results = {}
     
@@ -1841,21 +2453,15 @@ def test_password_requirements(requirements, password_settings_content=None, pam
             expected_value = int(requirements['minlen'])
             
             # Check configuration sources in priority order:
-            # 1. /etc/security/pwquality.conf
-            # 2. PAM modules (pam_pwquality, pam_unix)
-            # 3. /etc/login.defs
+            # 1. Check if pam_pwquality.so exists in /etc/pam.d/common-password
+            #    a. If it exists AND has minlen argument, use that value
+            #    b. If it exists but NO minlen argument, check /etc/security/pwquality.conf
+            # 2. If pam_pwquality.so doesn't exist at all, fallback to /etc/login.defs
             actual_value = None
+            pam_pwquality_exists = False
             
-            # First check pwquality.conf
-            if password_settings_content and 'minlen' in password_settings_content:
-                try:
-                    actual_value = int(password_settings_content['minlen'])
-                except (ValueError, TypeError):
-                    pass
-            
-            # If not found, check PAM modules
-            if actual_value is None and pamd_policy_settings_content:
-                # Parse PAM data to extract module settings
+            # Parse PAM data to check for pam_pwquality.so and extract module settings
+            if pamd_policy_settings_content:
                 pam_settings_dict = {}
                 for pam_line in pamd_policy_settings_content:
                     normalized_line = pam_line.replace('\\t', '\t')
@@ -1865,8 +2471,9 @@ def test_password_requirements(requirements, password_settings_content=None, pam
                     if len(parts) >= 3:
                         module_path = parts[2]
                         
-                        # Check if pam_pwquality or pam_unix is enabled
-                        if 'pam_pwquality.so' in module_path or 'pam_unix.so' in module_path:
+                        # Check if pam_pwquality.so is present
+                        if 'pam_pwquality.so' in module_path:
+                            pam_pwquality_exists = True
                             # Extract module options
                             if len(parts) > 3:
                                 for option in parts[3:]:
@@ -1874,14 +2481,24 @@ def test_password_requirements(requirements, password_settings_content=None, pam
                                         key, value = option.split('=', 1)
                                         pam_settings_dict[key.strip()] = value.strip()
                 
-                # Check for minlen in PAM settings
-                if 'minlen' in pam_settings_dict:
-                    try:
-                        actual_value = int(pam_settings_dict['minlen'])
-                    except (ValueError, TypeError):
-                        pass
+                # If pam_pwquality.so exists, check for minlen argument
+                if pam_pwquality_exists:
+                    if 'minlen' in pam_settings_dict:
+                        # Priority 1a: minlen argument in pam_pwquality.so line
+                        try:
+                            actual_value = int(pam_settings_dict['minlen'])
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # If no minlen argument, check pwquality.conf
+                    if actual_value is None and password_settings_content and 'minlen' in password_settings_content:
+                        # Priority 1b: /etc/security/pwquality.conf (when pam_pwquality.so exists but has no minlen arg)
+                        try:
+                            actual_value = int(password_settings_content['minlen'])
+                        except (ValueError, TypeError):
+                            pass
             
-            # If still not found, check login.defs
+            # Priority 2: Fallback to /etc/login.defs (if pam_pwquality.so doesn't exist or PAM settings unavailable)
             if actual_value is None and login_policy_settings_content:
                 policy_settings_dict = dict(login_policy_settings_content)
                 if 'PASS_MIN_LEN' in policy_settings_dict:
@@ -1905,14 +2522,8 @@ def test_password_requirements(requirements, password_settings_content=None, pam
                 'actual_value': actual_value
             }
             
-            # If a password was provided, test it against the expected value
-            if password_to_test is not None:
-                password_length = len(password_to_test)
-                password_passes = password_length >= expected_value
-                results['minlen']['password_passes'] = password_passes
-                # Don't do enforcement testing if a specific password was provided
-            # Only test enforcement if configured (actual matches expected) and value > 0 and no password provided
-            elif configured and expected_value > 0:
+            # Only test enforcement if configured (actual matches expected) and value > 0
+            if configured and expected_value > 0:
                 # Generate a password that meets the length requirement using pwmake
                 # Passing password should be EXACTLY expected_value length
                 try:
@@ -2019,6 +2630,63 @@ def test_password_requirements(requirements, password_settings_content=None, pam
                 'note': 'Testing not yet implemented'
             }
     
+    ### USER CHANGE PASSWORD TESTING ###
+    # If username is provided, track configuration timestamps and validate password change
+    if username_to_test and password_change_date:
+        # Check if all requirements are currently configured
+        all_configured = all(result.get('configured', False) for result in results.values() if isinstance(result, dict))
+        
+        # Load existing timestamps
+        timestamps = load_config_timestamps()
+        
+        if all_configured:
+            # All requirements are configured
+            if username_to_test not in timestamps:
+                # First time all requirements are configured - save timestamp
+                current_time = datetime.datetime.now()
+                timestamps[username_to_test] = {
+                    'timestamp': current_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'requirements': requirements.copy(),
+                    'validated_hash': None  # Will be set when password passes
+                }
+                save_config_timestamps(timestamps)
+                print(f"INFO: Saved configuration timestamp for {username_to_test}: {current_time}")
+            
+            # OPTIMIZATION: Check if password hash changed since last validation
+            current_hash = get_password_hash(username_to_test)
+            stored_hash = timestamps[username_to_test].get('validated_hash')
+            
+            # If hash unchanged and we've already validated it, skip expensive re-validation
+            if current_hash and stored_hash and current_hash == stored_hash:
+                # Password hasn't changed since last successful validation
+                results['password_passes'] = True
+            else:
+                # Hash changed or first check - perform full validation
+                if username_to_test in timestamps:
+                    config_timestamp_str = timestamps[username_to_test]['timestamp']
+                    config_timestamp = datetime.datetime.strptime(config_timestamp_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    # Password passes if it was changed AFTER all requirements were configured
+                    password_passes = password_change_date >= config_timestamp
+                    results['password_passes'] = password_passes
+                    
+                    # If password passes, save the hash to skip re-validation next time
+                    if password_passes and current_hash:
+                        timestamps[username_to_test]['validated_hash'] = current_hash
+                        save_config_timestamps(timestamps)
+
+                else:
+                    # Should not happen, but handle gracefully
+                    results['password_passes'] = False
+        else:
+            # Not all requirements are configured - clear timestamp and fail
+            if username_to_test in timestamps:
+                del timestamps[username_to_test]
+                save_config_timestamps(timestamps)
+                print(f"INFO: Cleared configuration data for {username_to_test} - requirements no longer fully configured")
+            
+            results['password_passes'] = False
+    
     return results
 
 
@@ -2047,9 +2715,11 @@ def load_programs():
         set: A set of all installed program names.
     """
     usr_bin_file_names = get_file_names_in_directory("/usr/bin")
+    usr_sbin_file_names = get_file_names_in_directory("/usr/sbin")
     snap_bin_file_names = get_file_names_in_directory("/snap/bin")
+    games_bin_file_names = get_file_names_in_directory("/usr/games")
 
-    all_file_names = usr_bin_file_names + snap_bin_file_names
+    all_file_names = usr_bin_file_names + usr_sbin_file_names + snap_bin_file_names + games_bin_file_names
     return set(all_file_names)
 
 
@@ -2074,6 +2744,90 @@ def load_versions():
         package_version = parts[2]
         package_list.append({"name": package_name, "version": package_version})
     return package_list
+
+
+def setup_program_inotify():
+    """
+    Sets up inotify watchers for program directories.
+    
+    Returns:
+        INotify: An inotify instance watching program directories.
+    """
+    inotify = INotify()
+    watch_flags = flags.CREATE | flags.DELETE | flags.MOVED_TO | flags.MOVED_FROM
+    
+    # Watch program directories
+    directories = ["/usr/bin", "/usr/sbin", "/snap/bin", "/usr/games"]
+    for directory in directories:
+        if os.path.exists(directory):
+            try:
+                inotify.add_watch(directory, watch_flags)
+            except Exception as e:
+                print(f"WARNING: Could not watch {directory}: {e}")
+    
+    return inotify
+
+
+def setup_versions_inotify():
+    """
+    Sets up inotify watcher for dpkg status file.
+    
+    Returns:
+        INotify: An inotify instance watching dpkg status file.
+    """
+    inotify = INotify()
+    watch_flags = flags.MODIFY | flags.CLOSE_WRITE
+    
+    dpkg_status = "/var/lib/dpkg/status"
+    if os.path.exists(dpkg_status):
+        try:
+            inotify.add_watch(dpkg_status, watch_flags)
+        except Exception as e:
+            print(f"WARNING: Could not watch {dpkg_status}: {e}")
+    
+    return inotify
+
+
+def check_program_changes(inotify_watcher):
+    """
+    Non-blocking check for program directory changes.
+    
+    Args:
+        inotify_watcher (INotify): The inotify instance watching program directories.
+    
+    Returns:
+        bool: True if changes detected, False otherwise.
+    """
+    try:
+        # Non-blocking read with 0 timeout
+        events = inotify_watcher.read(timeout=0, read_delay=0)
+        if events:
+            print(f"INFO: Detected {len(events)} program directory change(s)")
+            return True
+    except Exception:
+        pass  # No events available
+    return False
+
+
+def check_version_changes(inotify_watcher):
+    """
+    Non-blocking check for dpkg status file changes.
+    
+    Args:
+        inotify_watcher (INotify): The inotify instance watching dpkg status.
+    
+    Returns:
+        bool: True if changes detected, False otherwise.
+    """
+    try:
+        # Non-blocking read with 0 timeout
+        events = inotify_watcher.read(timeout=0, read_delay=0)
+        if events:
+            print(f"INFO: Detected dpkg database change")
+            return True
+    except Exception:
+        pass  # No events available
+    return False
 
 
 def load_services():
@@ -2153,7 +2907,6 @@ def account_management(vulnerabilities):
                 vulnerability_def[vuln.name](vulnerability, vuln.name)
 
 
-# check1
 def local_policies(vulnerabilities):
     """
     Manages local security policies based on the provided vulnerabilities and records hits/misses.
@@ -2187,8 +2940,6 @@ def local_policies(vulnerabilities):
             else:
                 vulnerability_def[vuln.name](vulnerability, vuln.name)
 
-
-# check1
 def program_management(vulnerabilities):
     """
     Manages installed programs based on the provided vulnerabilities and records hits/misses.
@@ -2306,6 +3057,8 @@ def policyCreation():
                 destination.write(line)
 """
 
+
+
 try:
     Settings = db_handler.Settings()
     menuSettings = Settings.get_settings(False)
@@ -2328,6 +3081,7 @@ except:
 total_points = 0
 total_vulnerabilities = 0
 prePoints = 0
+password_requirements_cache = {}  # Cache for password requirements extracted from vulnerabilities
 category_def = {
     "Account Management": account_management,
     "Local Policy": local_policies,
@@ -2340,24 +3094,57 @@ Desktop = menuSettings["Desktop"]
 index = "/var/www/CYBERPATRIOT"
 scoreIndex = index + "/ScoreReport.html"
 
-# --------- Main Loop ---------#
+menuSettings = Settings.get_settings(False)
+total_points = 0
+total_vulnerabilities = 0
+critical_items = []
+
+# Build password requirements cache from all categories
+password_requirements_cache = build_password_requirements_cache(categories, Vulnerabilities)
+
+# --------- Main Loop --------- #
 check_runas()
 iterations = 0
+
+# Initialize inotify watchers and load initial data
+program_inotify = setup_program_inotify()
+version_inotify = setup_versions_inotify()
+
+# Load initial state
+program_content = load_programs()
+program_versions = load_versions()
+
 while True:
     try:
-        # Reload settings from database each iteration to catch configuration updates
-        menuSettings = Settings.get_settings(False)
+        # DEVELOPING: Reload settings from database each iteration to catch configuration updates
+        if developerMode:
+            menuSettings = Settings.get_settings(False)
+            total_points = 0
+            total_vulnerabilities = 0
+            critical_items = []
+            # Build password requirements cache from all categories
+            password_requirements_cache = build_password_requirements_cache(categories, Vulnerabilities)
         
-        total_points = 0
-        total_vulnerabilities = 0
-        critical_items = []
-        login_policy_settings_content, pamd_policy_settings_content, password_settings_content, common_auth_content, faillock_settings_content = load_policy_settings()
+        # Always reload services (fast and state-based)
         services_content = load_services()
-        program_content = load_programs()
-        program_versions = load_versions()
+        
+        # Only reload programs if inotify detected changes
+        if check_program_changes(program_inotify):
+            program_content = load_programs()
+            print("INFO: Program list reloaded due to file system changes")
+        
+        # Only reload versions if dpkg database changed
+        if check_version_changes(version_inotify):
+            program_versions = load_versions()
+            print("INFO: Package versions reloaded due to dpkg changes")
+        
+        # Always reload policy settings (small files, quick reads)
+        login_policy_settings_content, pamd_policy_settings_content, password_settings_content, common_auth_content, faillock_settings_content = load_policy_settings() # Polls for configuration information.
         print("Scoring Engine loop 1st:" + str(iterations))
-        time.sleep(15)
+        time.sleep(10)
         draw_head()
+
+        # Grabs VulnerabilityTemplateModel object 
         for category in categories:
             category_def[category.name](
                 Vulnerabilities.get_option_template_by_category(category.id)
@@ -2366,7 +3153,7 @@ while True:
         draw_tail()
         check_score()
         print("Scoring Engine loop 2nd:" + str(iterations))
-        time.sleep(15)
+        time.sleep(10)
     except:
         f = open("scoring_engine.log", "w")
         e = traceback.format_exc()
@@ -2377,7 +3164,3 @@ while True:
             "The scoring engine has stopped working, a log has been saved to "
             + os.path.abspath("scoring_engine.log"),
         )
-
-# TODO add Functions:
-# updateautoinstall    ["Miscellaneous"]["Update Auto Install"]
-# taskscheduler        ["Miscellaneous"]["Task Scheduler"]

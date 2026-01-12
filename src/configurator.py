@@ -177,7 +177,7 @@ vulnerability_template = {
     "Update Program": {
         "Definition": "(WIP)Enable this to score the competitor for updating a program.",
         "Description": '(WIP)This will score the competitor for updating a program. To add more programs press the "Add" button. To remove a program press the "X" button next to the program you want to remove. Keep it one program per line.',
-        "Checks": "Program Name:Str, Version:Str",
+        "Checks": "Program Name:Str,Version:Str",
         "Category": "Program Management",
     },
     # "Add Feature": {"Definition": '(WIP)Enable this to score the competitor for adding a feature.',
@@ -206,8 +206,9 @@ vulnerability_template = {
         "Category": "Local Policy",
     },
     "Critical Programs": {
-        "Definition": "Enable this to penalize",
-        "Checks": "Program Name:Str,Service Start Mode:Str",
+        "Definition": "Enable this to penalize the competitor for removing a critical program.",
+        "Description": 'This will penalize the competitor for removing a critical program. To add more programs press the "Add" button. To remove a program press the "X" button next to the program you want to remove. Keep it one program per line.',
+        "Checks": "Program Name:Str",
         "Category": "Program Management",
     },
     "Update Check Period": {
@@ -398,12 +399,10 @@ class Config(Tk):
 
         self.MenuSettings = Settings.get_settings()
         temp_style = self.MenuSettings["Style"].get()
-
-        # ttk.Button(MainPage, text='Save', command=lambda: (save_config())).grid(sticky=EW)
-        #
+        
         ttk.Label(
             MainPage,
-            text="Leave blank if the current logged in users is the main otherwise enter the path manually.",
+            text="Scoring Report Location, commit when ready to deploy(Make sure to commit instead of just closing the window):",
         ).grid(row=0, column=0, sticky=W, columnspan=4)
         ttk.OptionMenu(MainPage, self.MenuSettings["Style"], *themeList).grid(
             row=0, column=5, sticky=EW
@@ -488,10 +487,16 @@ class Config(Tk):
             font="Verdana 10 bold",
             wraplength=150,
         ).grid(row=6, column=1)
+        # ttk.Label(
+        #     MainPage,
+        #     text="Created by Shaun Martin, Anthony Nguyen, Bryan Ortiz and Minh-Khoi Do",
+        # ).grid(row=10, column=0, columnspan=4, sticky=SW)
         ttk.Label(
             MainPage,
-            text="Created by Shaun Martin, Anthony Nguyen, Bryan Ortiz and Minh-Khoi Do",
+            text="Testing/Configuring: To update db and scoring report, use the button below:",
         ).grid(row=10, column=0, columnspan=4, sticky=SW)
+        ttk.Button(MainPage, text='Save Configuration', width=25, command=lambda: (save_config())).grid(
+            row=11, sticky=W)
         MainPage.columnconfigure(tuple(range(10)), weight=1)
         # MainPage.rowconfigure(tuple(range(5)), weight=1)
 
@@ -826,7 +831,8 @@ def load_modify_settings(frame, entry, name, idx):
             ttk.OptionMenu(
                 modifyPageListRow,
                 entry[idx]["Checks"][t],
-                *["Running", "Running", "Stopped"],
+                entry[idx]["Checks"][t].get(),
+                "active", "inactive", "failed",
             ).grid(row=0, column=r, sticky=EW)
             c = r + 1
         elif t == "Service Start Mode":
@@ -834,7 +840,8 @@ def load_modify_settings(frame, entry, name, idx):
             ttk.OptionMenu(
                 modifyPageListRow,
                 entry[idx]["Checks"][t],
-                *["Auto", "Auto", "Manual", "Disabled"],
+                entry[idx]["Checks"][t].get(),
+                "enabled", "disabled", "masked",
             ).grid(row=0, column=r, sticky=EW)
             c = r + 1
         elif t == "User Name":
@@ -936,7 +943,8 @@ def add_row(frame, entry, name):
         elif t == "Service State":
             mod_frame.grid_columnconfigure(r, weight=1)
             ttk.OptionMenu(
-                mod_frame, entry[idx]["Checks"][t], *["Running", "Running", "Stopped"]
+                mod_frame, entry[idx]["Checks"][t], entry[idx]["Checks"][t].get(),
+                "active", "inactive", "failed"
             ).grid(row=0, column=r, sticky=EW)
             c = r + 1
         elif t == "Service Start Mode":
@@ -944,7 +952,8 @@ def add_row(frame, entry, name):
             ttk.OptionMenu(
                 mod_frame,
                 entry[idx]["Checks"][t],
-                *["Auto", "Auto", "Manual", "Disabled"],
+                entry[idx]["Checks"][t].get(),
+                "enabled", "disabled", "masked",
             ).grid(row=0, column=r, sticky=EW)
             c = r + 1
         elif t == "User Name":
@@ -984,14 +993,15 @@ def remove_row(entry, idx, widget):
     Remove a row from the vulnerability option table and UI.
 
     Args:
-        entry (dict): Vulnerability settings.
+        entry (dict): Vulnerability settings dictionary (all entries).
         idx (int): Index of the row to remove.
         widget (tk.Widget): Widget to destroy.
 
     Returns:
         None
     """
-    del entry[idx]
+    if idx in entry:
+        del entry[idx]
     widget.destroy()
 
 
@@ -1229,8 +1239,8 @@ def tally():
     tally_vuln = 0
     for vuln in vuln_settings:
         try:
-            # Skip "Critical Users" - it's a penalty, not a scoring opportunity
-            if vuln == "Critical Users":
+            # Skip critical items - they're penalties, not scoring opportunities
+            if vuln in ["Critical Users", "Critical Services", "Critical Programs"]:
                 continue
                 
             if int(vuln_settings[vuln][1]["Enabled"].get()) == 1:
