@@ -375,19 +375,40 @@ def forensic_question(vulnerability):
     """
     for idx, vuln in enumerate(vulnerability):
         if vuln != 1:
-            file = open(vulnerability[vuln]["Location"], "r")
-            content = file.read().splitlines()
-            for c in content:
-                if "ANSWER:" in c:
-                    if vulnerability[vuln]["Answers"] in c:
-                        record_hit(
-                            "Forensic question number "
-                            + str(idx)
-                            + " has been answered.",
-                            vulnerability[vuln]["Points"],
-                        )
-                    else:
-                        record_miss("Forensic Question")
+            location = vulnerability[vuln]["Location"]
+            
+            # Skip if location is empty or not configured
+            if not location or not location.strip():
+                continue
+            
+            # Skip if file doesn't exist
+            if not os.path.exists(location):
+                record_miss("File Management")
+                continue
+                
+            try:
+                file = open(location, "r")
+                content = file.read().splitlines()
+                file.close()
+                
+                for c in content:
+                    if "ANSWER:" in c:
+                        if vulnerability[vuln]["Answers"] in c:
+                            record_hit(
+                                "Forensic question number "
+                                + str(idx)
+                                + " has been answered.",
+                                vulnerability[vuln]["Points"],
+                            )
+                        else:
+                            record_miss("File Management")
+                        break
+                else:
+                    # No "ANSWER:" line found in file
+                    record_miss("File Management")
+            except (IOError, PermissionError) as e:
+                print(f"Warning: Could not read forensic file {location}: {e}")
+                record_miss("File Management")
 
 
 def critical_users(vulnerability):

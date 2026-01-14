@@ -219,7 +219,7 @@ vulnerability_template = {
     #                       "Category": 'Program Management'},
     "Forensic": {
         "Definition": "Enable this to score the competitor for answering forensic a question.",
-        "Description": 'This will score the competitor for answering forensic questions. To add more questions press the "Add" button. To remove questions press the "X" button next to the question you want to remove. The location will automatically be set to the desktop of that is set in the main menu.',
+        "Description": 'This will score the competitor for answering forensic questions. To add more questions press the "Add" button. To remove questions press the "X" button next to the question you want to remove. The location will automatically be set to the desktop location configured in the main page.',
         "Checks": "Question:Str,Answers:Str,Location:Str",
         "Category": "File Management",
     },
@@ -862,6 +862,12 @@ def load_modify_settings(frame, entry, name, idx):
                 values=group_list,
             ).grid(row=0, column=r, sticky=EW)
             c = r + 1
+        elif t == "Location":
+            # Make Location field read-only for forensic questions
+            modifyPageListRow.grid_columnconfigure(r, weight=1)
+            location_entry = ttk.Entry(modifyPageListRow, textvariable=entry[idx]["Checks"][t], state="readonly")
+            location_entry.grid(row=0, column=r, sticky=EW)
+            c = r + 1
         else:
             # print(t)
             modifyPageListRow.grid_columnconfigure(r, weight=1)
@@ -970,6 +976,12 @@ def add_row(frame, entry, name):
                 mod_frame, textvariable=entry[idx]["Checks"][t], values=group_list
             ).grid(row=0, column=r, sticky=EW)
             c = r + 1
+        elif t == "Location":
+            # Make Location field read-only for forensic questions
+            mod_frame.grid_columnconfigure(r, weight=1)
+            location_entry = ttk.Entry(mod_frame, textvariable=entry[idx]["Checks"][t], state="readonly")
+            location_entry.grid(row=0, column=r, sticky=EW)
+            c = r + 1
         else:
             mod_frame.grid_columnconfigure(r, weight=1)
             ttk.Entry(mod_frame, textvariable=entry[idx]["Checks"][t]).grid(
@@ -1042,17 +1054,62 @@ def create_forensic():
         None
     """
     qHeader = (
-        "This is a forensics question. Answer it below\n------------------------\n"
+        "This is a forensics question. Answer it below(answers are case sensitive)\n---------------------------------------\n"
     )
     qFooter = "\n\nANSWER: <TypeAnswerHere>"
     if vuln_settings["Forensic"][1]["Enabled"].get() == 1:
-        q_num = 1
+        # Check what forensic question numbers already exist on the desktop
+        desktop_path = str(root.MenuSettings["Desktop"].get())
+        existing_numbers = set()
+        
+        if os.path.exists(desktop_path):
+            for filename in os.listdir(desktop_path):
+                if filename.startswith("Forensic Question ") and filename.endswith(".txt"):
+                    try:
+                        # Extract the number from "Forensic Question X.txt"
+                        num_str = filename[18:-4]  # Skip "Forensic Question " and ".txt"
+                        num = int(num_str)
+                        existing_numbers.add(num)
+                    except ValueError:
+                        pass  # Ignore files with non-numeric numbers
+        
+        # Also check existing Location values in other questions
+        for question in vuln_settings["Forensic"]:
+            if question != 1:
+                location = vuln_settings["Forensic"][question]["Checks"]["Location"].get()
+                if location:
+                    # Extract number from location path if it matches the pattern
+                    try:
+                        # Find "Forensic Question X.txt" in the path
+                        if "Forensic Question " in location and location.endswith(".txt"):
+                            # Get the filename from the full path
+                            filename = os.path.basename(location)
+                            num_str = filename[18:-4]  # Skip "Forensic Question " and ".txt"
+                            num = int(num_str)
+                            existing_numbers.add(num)
+                    except ValueError:
+                        pass  # Ignore non-standard paths
+        
+        # Find available numbers starting from 1
+        available_numbers = []
+        num = 1
+        for question in vuln_settings["Forensic"]:
+            if question != 1:
+                # Find next available number
+                while num in existing_numbers:
+                    num += 1
+                available_numbers.append(num)
+                num += 1
+        
+        # Now assign the available numbers to questions
+        num_index = 0
         for question in vuln_settings["Forensic"]:
             if question != 1:
                 location = vuln_settings["Forensic"][question]["Checks"][
                     "Location"
                 ].get()
                 if location == "":
+                    q_num = available_numbers[num_index]
                     vuln_settings["Forensic"][question]["Checks"]["Location"].set(
                         str(root.MenuSettings["Desktop"].get())
                         + "Forensic Question "
@@ -1062,7 +1119,7 @@ def create_forensic():
                     location = vuln_settings["Forensic"][question]["Checks"][
                         "Location"
                     ].get()
-                    q_num += 1
+                    num_index += 1
                 g = open(location, "w+")
                 g.write(
                     qHeader
@@ -1070,6 +1127,10 @@ def create_forensic():
                     + qFooter
                 )
                 g.close()
+                
+                # Set permissions to give basic users write access (0o666 = rw-rw-rw-)
+                os.chmod(location, 0o666)
+
 
 def resource_path(relative_path):
     """
@@ -1434,7 +1495,7 @@ def generate_export(extension):
                     )
                 temp_body += "\n\t\t\t\t</tr>"
                 for setting in settings:
-                    if (width > 0 and setting != 1) or (width == 0):
+                    if (width > 0 and setting != 1) or (width == 1):
                         temp_body += (
                             '\n\t\t\t\t<tr>\n\t\t\t\t\t<td width="5%">'
                             + str(settings[setting]["Points"].get())

@@ -675,3 +675,76 @@ Penalizes competitors for modifying the state or start mode of critical services
 - [x] Modify both state and start mode simultaneously, should record a penalty
 
 **Note:** Unlike regular Services which require both conditions to match for points, Critical Services apply penalties if EITHER condition is violated. This is intentional to protect critical system services from any unauthorized changes.
+
+# **File Management**
+
+## Forensic
+**Function:** `forensic_question(vulnerability)`
+
+Scores competitors for correctly answering forensic questions placed on their desktop.
+
+**Implementation:**
+- Iterates through configured forensic question vulnerabilities
+- Opens the forensic question file at the specified location
+- Reads the file content line by line
+- Searches for lines containing "ANSWER:"
+- Compares the text after "ANSWER:" with the configured correct answer
+- Records hit if the answer matches the configured answer string
+- Records miss if the answer is incorrect, missing, or file cannot be read
+
+**Scoring Behavior:**
+- Awards points when the answer in the file matches the configured correct answer
+- Records miss if the file does not exist or cannot be read
+- Records miss if no "ANSWER:" line is found in the file
+- Records miss if the answer provided does not match the configured answer
+- Answer comparison is case-sensitive and must match exactly
+
+**Tests:**
+- [x] Leave location blank and wait for engine to loop, should not cause scoring engine to error
+- [x] Configure a forensic question with correct answer, file should be created on desktop
+- [x] Verify file has write permissions for basic users (0o666)
+- [x] Type the correct answer after "ANSWER:", should record a hit
+- [x] Type an incorrect answer after "ANSWER:", should record a miss
+- [x] Type the correct answer with different capitalization, should record a miss (case-sensitive)
+- [x] Delete the forensic question file, should record a miss (file not found)
+- [x] Recreate file by saving/committing configuration, file should be recreated
+- [x] Delete a forensic question file and add a new forensic question, should not be set to the same location as the deleted file ending up with duplicate locations.
+- [x] Create 3 questions and save, then delete question 2 and its file and save, finally create a new question which should then be the new question 2.
+- [x] Modify the question text in configurator, file should be reset on next save/commit
+
+### **File Creation:**
+- Forensic question files are created by `create_forensic()` in configurator.py
+- Files are created with permissions 0o666 (rw-rw-rw-) to allow basic users to write answers
+- Default location is the user's desktop as specified in configurator settings
+- Files are automatically created/updated when configuration is saved or committed
+- File naming scheme: `/home/<user>/Desktop/Forensic Question <number>.txt`
+
+**Note:** The forensic question file format is:
+```
+This is a forensics question. Answer it below
+------------------------
+<Question text from configuration>
+
+ANSWER: <TypeAnswerHere>
+```
+Users must replace `<TypeAnswerHere>` with their answer. The answer check is performed by string matching on the text after "ANSWER:" in the file.
+
+## Bad File
+**Function:** `file_manipulation(vulnerability, "Bad File")`
+
+Scores competitors for removing unauthorized or malicious files from the system.
+
+**Implementation:**
+- Uses `os.path.isfile()` to check if each specified bad file exists
+- Records hit if file is not found (successfully removed)
+- Records miss if file still exists
+
+**Scoring Behavior:**
+- Awards points when specified file is NOT present on the system
+- Records miss if file is still found
+
+**Tests:**
+- [ ] Configure a bad file that is already removed, should record a hit
+- [ ] Restore the bad file, should record a miss
+- [ ] Remove the bad file using `rm`, should record a hit
+- [ ] Recreate the bad file, should record a miss
