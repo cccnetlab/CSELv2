@@ -638,8 +638,6 @@ Scores competitors for properly configuring system services to specified states 
 - [x] Configure a non-existent service name, should record a miss
 - [x] Test with service name without .service extension, should still work correctly
 
-**Note:** Service state and start mode are independent - a service can be active but disabled (running now but won't start on boot), or inactive but enabled (stopped now but will start on boot). Both conditions must match for points to be awarded.
-
 ## Critical Services
 **Function:** `critical_services(vulnerability)` called by `critical_functions(vulnerabilities)`
 
@@ -744,7 +742,69 @@ Scores competitors for removing unauthorized or malicious files from the system.
 - Records miss if file is still found
 
 **Tests:**
-- [ ] Configure a bad file that is already removed, should record a hit
-- [ ] Restore the bad file, should record a miss
-- [ ] Remove the bad file using `rm`, should record a hit
-- [ ] Recreate the bad file, should record a miss
+- [x] Configure a bad file that doesn't exit, should record a hit
+- [x] Create the bad file, should record a miss
+- [x] Remove the bad file using `rm`, should record a hit
+- [x] Configure a bad directory that doesn't exit, should record a hit
+- [x] Create the bad directory, should record a miss
+- [x] Remove the bad directory using `rm -rf`, should record a hit
+
+## Add Text to File
+**Function:** `add_text_to_file(vulnerability)`
+
+Scores competitors for adding specific text content to a designated file.
+
+**Implementation:**
+- Iterates through configured "Add Text to File" vulnerabilities
+- Validates file path is not empty or whitespace-only
+  - Skips vulnerability if file path is empty or invalid
+- Opens specified file at configured file path in read mode
+- Reads entire file content into memory
+- Uses `re.search()` with configured text pattern to check if text exists in file
+- Records hit if text pattern is found in file content
+- Records miss if text is not found in the file
+- Silently skips if file doesn't exist, can't be read, or encounters an error
+
+**Scoring Behavior:**
+- Awards points when specified text is present in the target file
+- Records miss if text is not found in file
+- Supports regex patterns for flexible text matching
+- File must be readable by scoring engine
+
+**Tests:**
+- [x] Configure "Add Text to File" with file path and text pattern, should record a miss
+- [x] Add the exact text to the file, should record a hit
+- [x] Add extra text, shouldn't change the result.
+- [x] Remove the text from file, should record a miss
+- [x] Test with regex pattern (e.g., "^admin.*user$"), verify regex matching works
+- [x] Remove the file, should record a miss
+
+## Remove Text From File
+**Function:** `remove_text_from_file(vulnerability)`
+
+Scores competitors for removing specific text content from a designated file.
+
+**Implementation:**
+- Iterates through configured "Remove Text From File" vulnerabilities
+- Validates file path is not empty or whitespace-only
+  - Skips vulnerability if file path is empty or invalid
+- Opens specified file at configured file path in read mode
+- Reads entire file content into memory
+- Uses `re.search()` with configured text pattern to check if text is absent from file
+- Records hit if text pattern is NOT found in file content (successfully removed)
+- Records miss if text is still present in the file
+- Silently skips if file doesn't exist, can't be read, or encounters an error
+
+**Scoring Behavior:**
+- Awards points when specified text is NOT present in the target file
+- Records miss if text is still found in file
+- Supports regex patterns for flexible text matching
+- File must be readable by scoring engine
+
+**Tests:**
+- [x] Configure "Remove Text From File" with file path and text pattern that exists in file, should record a miss
+- [x] Modify the text from the file, should record a hit
+- [x] Completely empty the file, should record a hit
+- [x] Add the text back to file, should record a miss
+- [x] Test with regex pattern, verify pattern no longer matches after removal
+- [x] Remove the file, should record a miss

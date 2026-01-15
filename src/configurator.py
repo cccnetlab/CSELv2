@@ -225,7 +225,7 @@ vulnerability_template = {
     },
     "Bad File": {
         "Definition": "Enable this to score the competitor for deleting a file.",
-        "Description": 'This will score the competitor for deleting a file. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
+        "Description": 'This will score the competitor for deleting a file or directory. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
         "Checks": "File Path:Str",
         "Category": "File Management",
     },
@@ -236,20 +236,20 @@ vulnerability_template = {
     },
     "Add Text to File": {
         "Definition": "Enable this to score the competitor for adding text to a file.",
-        "Description": 'This will score the competitor for adding text to a file. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
+        "Description": 'This will score the competitor for adding text to a file using regex pattern matching. The text pattern supports Python regular expressions (regex) for flexible matching. Provide the absolute file path and the regex pattern to search for. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
         "Checks": "Text to Add:Str,File Path:Str",
         "Category": "File Management",
     },
     "Remove Text From File": {
         "Definition": "Enable this to score the competitor for removing text from a file.",
-        "Description": 'This will score the competitor for removing text from a file. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
+        "Description": 'This will score the competitor for removing text from a file using regex pattern matching. The text pattern supports Python regular expressions (regex) for flexible matching. Provide the absolute file path and the regex pattern to search for. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
         "Checks": "Text to Remove:Str,File Path:Str",
         "Category": "File Management",
     },
     "File Permissions": {
         "Definition": "(WIP)Enable this to score the competitor for changing the permissions a user has on a file.",
         "Description": '(WIP)This will score the competitor for changing the permissions a user has on a file. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
-        "Checks": "Users to Modify:Str,Permissions:Str,File Path:Str",
+        "Checks": "Users to Modify:Str,Permissions:Str,Object Path:Str",
         "Category": "File Management",
     },
     # "Anti-Virus": {"Definition": 'Enable this to score the competitor for installing an anti-virus. Not windows defender.',
@@ -793,7 +793,7 @@ def load_modify_settings(frame, entry, name, idx):
     c = 0
     for r, t in enumerate(entry[idx]["Checks"]):
         r += 1
-        if t == "File Path":
+        if t == "Object Path":
             modifyPageListRow.grid_columnconfigure(r, weight=1)
             path = ttk.Frame(modifyPageListRow)
             path.grid(row=0, column=r, sticky=EW)
@@ -814,6 +814,26 @@ def load_modify_settings(frame, entry, name, idx):
                 text="...",
                 command=lambda: set_file_or_directory(
                     entry[idx]["Checks"], switch, name
+                ),
+            ).grid(row=0, column=1)
+            c = r + 1
+        elif t == "File Path":
+            modifyPageListRow.grid_columnconfigure(r, weight=1)
+            path = ttk.Frame(modifyPageListRow)
+            path.grid(row=0, column=r, sticky=EW)
+            path.grid_columnconfigure(0, weight=1)
+            ttk.Label(
+                path,
+                text="Uses regex, to use a special character escape it with a backslash(\\).",
+            ).grid(row=1, column=0, sticky=E)
+            ttk.Entry(path, textvariable=entry[idx]["Checks"][t]).grid(
+                row=0, column=0, sticky=EW
+            )
+            ttk.Button(
+                path,
+                text="...",
+                command=lambda: set_file_only(
+                    entry[idx]["Checks"], name
                 ),
             ).grid(row=0, column=1)
             c = r + 1
@@ -915,7 +935,7 @@ def add_row(frame, entry, name):
     c = 0
     for r, t in enumerate(entry[idx]["Checks"]):
         r += 1
-        if t == "File Path":
+        if t == "Object Path":
             mod_frame.grid_columnconfigure(r, weight=1)
             path = ttk.Frame(mod_frame)
             path.grid(row=0, column=r, sticky=EW)
@@ -936,6 +956,22 @@ def add_row(frame, entry, name):
                 text="...",
                 command=lambda: set_file_or_directory(
                     entry[idx]["Checks"], switch, name
+                ),
+            ).grid(row=0, column=1)
+            c = r + 1
+        elif t == "File Path":
+            mod_frame.grid_columnconfigure(r, weight=1)
+            path = ttk.Frame(mod_frame)
+            path.grid(row=0, column=r, sticky=EW)
+            path.grid_columnconfigure(0, weight=1)
+            ttk.Entry(path, textvariable=entry[idx]["Checks"][t]).grid(
+                row=0, column=0, sticky=EW
+            )
+            ttk.Button(
+                path,
+                text="...",
+                command=lambda: set_file_only(
+                    entry[idx]["Checks"], name
                 ),
             ).grid(row=0, column=1)
             c = r + 1
@@ -1031,15 +1067,30 @@ def set_file_or_directory(var, switch, mode):
     """
     if switch.get() == 1:
         file = filedialog.askdirectory()
-        var["File Path"].set(file)
+        var["Object Path"].set(file)
     else:
         file = filedialog.askopenfilename()
-        var["File Path"].set(file)
+        var["Object Path"].set(file)
     if mode == "File Permissions":
         status = os.stat(file)
         current = bin(status.st_mode)[-9:]
         for idx, perm in enumerate(current):
             var["Permissions"][idx].set(int(perm))
+
+
+def set_file_only(var, mode):
+    """
+    Set the file path for a vulnerability option (file only, no directory option).
+
+    Args:
+        var (dict): Dictionary of Tkinter variables for the option.
+        mode (str): Vulnerability mode (e.g., "Add Text to File").
+
+    Returns:
+        None
+    """
+    file = filedialog.askopenfilename()
+    var["File Path"].set(file)
 
 
 # check

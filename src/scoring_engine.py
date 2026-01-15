@@ -1579,18 +1579,31 @@ def add_text_to_file(vulnerability):
     """
     for vuln in vulnerability:
         if vuln != 1:
-            file = open(vulnerability[vuln]["File Path"], "r")
-            content = file.read()
-            file.close()
-            if re.search(vulnerability[vuln]["Text to Add"], content):
-                record_hit(
-                    vulnerability[vuln]["Text to Add"]
-                    + " has been added to "
-                    + vulnerability[vuln]["File Path"],
-                    vulnerability[vuln]["Points"],
-                )
-            else:
+            # Support both new and old field names for backward compatibility
+            file_path = vulnerability[vuln].get("File Path") or vulnerability[vuln].get("File Path (Regex)") or vulnerability[vuln].get("Object Path", "")
+            # Skip empty or invalid file paths
+            if not file_path or not file_path.strip():
+                continue
+            try:
+                file = open(file_path, "r")
+                content = file.read()
+                file.close()
+                if re.search(vulnerability[vuln]["Text to Add"], content):
+                    record_hit(
+                        vulnerability[vuln]["Text to Add"]
+                        + " has been added to "
+                        + file_path,
+                        vulnerability[vuln]["Points"],
+                    )
+                else:
+                    record_miss("File Management")
+            except re.error:
+                # Skip if regex pattern is invalid
+                continue
+            except (FileNotFoundError, PermissionError, OSError):
+                # Skip if file doesn't exist or can't be read
                 record_miss("File Management")
+                continue
 
 
 # check
@@ -1603,18 +1616,31 @@ def remove_text_from_file(vulnerability):
     """
     for vuln in vulnerability:
         if vuln != 1:
-            file = open(vulnerability[vuln]["File Path"], "r")
-            content = file.read()
-            file.close()
-            if not re.search(vulnerability[vuln]["Text to Remove"], content):
-                record_hit(
-                    vulnerability[vuln]["Text to Remove"]
-                    + " has been removed from "
-                    + vulnerability[vuln]["File Path"],
-                    vulnerability[vuln]["Points"],
-                )
-            else:
+            # Support both new and old field names for backward compatibility
+            file_path = vulnerability[vuln].get("File Path") or vulnerability[vuln].get("File Path (Regex)") or vulnerability[vuln].get("Object Path", "")
+            # Skip empty or invalid file paths
+            if not file_path or not file_path.strip():
+                continue
+            try:
+                file = open(file_path, "r")
+                content = file.read()
+                file.close()
+                if not re.search(vulnerability[vuln]["Text to Remove"], content):
+                    record_hit(
+                        vulnerability[vuln]["Text to Remove"]
+                        + " has been removed from "
+                        + file_path,
+                        vulnerability[vuln]["Points"],
+                    )
+                else:
+                    record_miss("File Management")
+            except re.error:
+                # Skip if regex pattern is invalid
+                continue
+            except (FileNotFoundError, PermissionError, OSError):
+                # Skip if file doesn't exist or can't be read
                 record_miss("File Management")
+                continue
 
 
 def start_up_apps(vulnerability):
@@ -2135,17 +2161,21 @@ def anti_virus(vulnerability):
 # test
 def bad_file(vulnerability):
     """
-    Checks for the existence of specific files and records hits/misses based on their presence.
+    Checks for the existence of specific files or directories and records hits/misses based on their presence.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
     for vuln in vulnerability:
         if vuln != 1:
-            if not os.path.exists(vulnerability[vuln]["File Path"]):
+            # Support both Object Path (new) and File Path (old) for backward compatibility
+            file_path = vulnerability[vuln].get("Object Path") or vulnerability[vuln].get("File Path", "")
+            if not file_path:
+                continue
+            if not os.path.exists(file_path):
                 record_hit(
                     "The item "
-                    + vulnerability[vuln]["File Path"]
+                    + file_path
                     + " has been removed.",
                     vulnerability[vuln]["Points"],
                 )
@@ -2162,13 +2192,17 @@ def permission_checks(vulnerability):
     """
     for vuln in vulnerability:
         if vuln != 1:
+            # Support both Object Path (new) and File Path (old) for backward compatibility
+            file_path = vulnerability[vuln].get("Object Path") or vulnerability[vuln].get("File Path", "")
+            if not file_path:
+                continue
             if (
-                oct(os.stat(vulnerability[vuln]["File Path"]).st_mode & 0o777)
+                oct(os.stat(file_path).st_mode & 0o777)
                 is vulnerability[vuln]["Permissions"]
             ):
                 record_hit(
                     "The "
-                    + vulnerability[vuln]["File Path"]
+                    + file_path
                     + " permissions have been updated.",
                     vulnerability[vuln]["Points"],
                 )
@@ -3003,7 +3037,7 @@ def file_management(vulnerabilities):
     vulnerability_def = {
         "Forensic": forensic_question,
         "Check Hosts": check_hosts,
-        "Bad File": bad_file,
+        "Bad File/Directory": bad_file,
         "Add Text to File": add_text_to_file,
         "Remove Text From File": remove_text_from_file,
         "File Permissions": permission_checks,

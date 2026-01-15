@@ -20,3 +20,6 @@
 .claude/
 CLAUDE.md
 .vscode/
+
+# Developer specific files
+*.log
