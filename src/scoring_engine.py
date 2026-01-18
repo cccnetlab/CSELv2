@@ -2183,30 +2183,102 @@ def bad_file(vulnerability):
                 record_miss("File Management")
 
 
+def get_user_permission_on_file(username, file_path):
+    """
+    Determine what permission level a specific user has on a file or directory.
+    
+    Args:
+        username (str): The username to check permissions for.
+        file_path (str): The path to the file or directory.
+    
+    Returns:
+        int: The permission octal digit (0-7) that applies to this user.
+             Returns owner permissions if user owns the file,
+             group permissions if user is in the file's group,
+             other permissions otherwise.
+             Returns None if the file doesn't exist or user doesn't exist.
+    """
+    try:
+        # Get file stats
+        stat_info = os.stat(file_path)
+        file_mode = stat_info.st_mode
+        file_uid = stat_info.st_uid
+        file_gid = stat_info.st_gid
+        
+        # Get user info
+        user_info = getpwnam(username)
+        user_uid = user_info.pw_uid
+        
+        # Get all groups the user belongs to
+        user_groups = [g.gr_gid for g in grp.getgrall() if username in g.gr_mem]
+        # Also add the user's primary group
+        user_groups.append(user_info.pw_gid)
+        
+        # Determine which permission bits apply
+        if user_uid == file_uid:
+            # User is the owner - return owner permissions (first octal digit)
+            return (file_mode >> 6) & 0o7
+        elif file_gid in user_groups:
+            # User is in the file's group - return group permissions (second octal digit)
+            return (file_mode >> 3) & 0o7
+        else:
+            # User is neither owner nor in group - return other permissions (third octal digit)
+            return file_mode & 0o7
+            
+    except (FileNotFoundError, PermissionError, KeyError, OSError) as e:
+        print(f"Error checking permissions for user {username} on {file_path}: {e}")
+        return None
+
+
 def permission_checks(vulnerability):
     """
-    Checks file permissions against expected values and records hits/misses.
+    Checks file permissions for specific users against expected values and records hits/misses.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
     for vuln in vulnerability:
         if vuln != 1:
-            # Support both Object Path (new) and File Path (old) for backward compatibility
-            file_path = vulnerability[vuln].get("Object Path") or vulnerability[vuln].get("File Path", "")
+            # Get the file path
+            file_path = vulnerability[vuln].get("Object Path")
             if not file_path:
                 continue
-            if (
-                oct(os.stat(file_path).st_mode & 0o777)
-                is vulnerability[vuln]["Permissions"]
-            ):
-                record_hit(
-                    "The "
-                    + file_path
-                    + " permissions have been updated.",
-                    vulnerability[vuln]["Points"],
-                )
-            else:
+            
+            # Get the username and expected permission
+            username = vulnerability[vuln].get("Users to Modify")
+            expected_perm_str = vulnerability[vuln].get("Permissions(R/W/X)", "")
+            
+            # Validate inputs - only username is required
+            if not username:
+                print(f"Warning: Missing username for {file_path}")
+                record_miss("File Management")
+                continue
+            
+            try:
+                # Get expected permission as integer (0-7), treat empty string as 0
+                expected_perm = int(expected_perm_str or "0")
+                
+                # Get the actual permission this user has on the file
+                actual_perm = get_user_permission_on_file(username, file_path)
+                print("DEBUG: Checking permissions for user", username, "on", file_path)
+                print("DEBUG: Expected permission:", expected_perm, "Actual permission:", actual_perm)
+                if actual_perm is None:
+                    # Error getting permissions (file doesn't exist, user doesn't exist, etc.)
+                    print(f"Warning: Could not check permissions for user '{username}' on '{file_path}'")
+                    record_miss("File Management")
+                    continue
+                
+                # Compare actual vs expected
+                if actual_perm == expected_perm:
+                    record_hit(
+                        f"User '{username}' has correct permissions ({actual_perm}) on {file_path}.",
+                        vulnerability[vuln]["Points"],
+                    )
+                else:
+                    record_miss("File Management")
+                    
+            except (ValueError, KeyError, FileNotFoundError, OSError) as e:
+                print(f"Error checking permissions for {file_path}: {e}")
                 record_miss("File Management")
 
 

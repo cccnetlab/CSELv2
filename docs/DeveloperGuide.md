@@ -808,3 +808,42 @@ Scores competitors for removing specific text content from a designated file.
 - [x] Add the text back to file, should record a miss
 - [x] Test with regex pattern, verify pattern no longer matches after removal
 - [x] Remove the file, should record a miss
+
+## File Permissions
+**Function:** `permission_checks(vulnerability)`
+
+Scores competitors for properly configuring file or directory permissions for specific users to restrict or grant read, write, and execute access.
+
+**Implementation:**
+- Retrieves file path from `vulnerability[vuln].get("Object Path")`
+- Gets target username from `vulnerability[vuln].get("Users to Modify")`
+- Gets expected permission digit (0-7) from `vulnerability[vuln].get("Permissions(R/W/X)", "")`
+- Treats empty permission string as 0 (no permissions)
+- Calls `get_user_permission_on_file(username, file_path)` to determine user's actual permissions:
+  - If user is the file owner → returns owner permission bits (first octal digit)
+  - Else if user is in file's group → returns group permission bits (second octal digit)
+  - Else → returns other permission bits (third octal digit)
+- Compares actual permission digit (0-7) with expected permission digit
+- Records hit if permissions match exactly
+
+**Scoring Behavior:**
+- Awards points when specified user has exactly the configured permission level on the file/directory
+- Records miss if username is missing from configuration
+- Records miss if file/directory doesn't exist or permissions cannot be checked
+- Records miss if user's actual permission differs from expected permission
+
+**Tests:**
+- [x] Create test file (`testfile.txt`) and test user (`testuser`), make testuser owner of file
+- [x] Set file to 600 (rw- for owner), configure for testuser with permission 6, should record a hit
+- [x] Change to 700, configure for testuser with permission 6, should record a miss (expects rw-, has rwx)
+- [x] Create test group (`testgroup`), add testuser to testgroup, change file owner to root, set file group to testgroup
+- [x] Set file to 060 (rw- for group), configure for testuser with permission 6, should record a hit
+- [x] Change to 070, configure for testuser with permission 6, should record a miss (expects rw-, has rwx)
+- [x] Remove testuser from testgroup, ensure testuser is NOT file owner and NOT in file group
+- [x] Set file to 006 (rw- for other), configure for testuser with permission 6, should record a hit
+- [x] Change to 007, configure for testuser with permission 6, should record a miss (expects rw-, has rwx)
+- [x] Test with permission field left empty (defaults to 0), create file should record miss
+- [x] Set file permissions to 0 for user, group, or other, whichever group your test user falls into.
+- [x] Test with non-existent file path, should record a miss and log error
+- [x] Test with non-existent username, should record a miss and log error
+- [x] Test with directory instead of file, should work identically

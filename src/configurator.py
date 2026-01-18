@@ -247,9 +247,9 @@ vulnerability_template = {
         "Category": "File Management",
     },
     "File Permissions": {
-        "Definition": "(WIP)Enable this to score the competitor for changing the permissions a user has on a file.",
-        "Description": '(WIP)This will score the competitor for changing the permissions a user has on a file. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
-        "Checks": "Users to Modify:Str,Permissions:Str,Object Path:Str",
+        "Definition": "Enable this to score the competitor for changing the permissions a user has on a file.",
+        "Description": 'This will score the competitor for changing the permissions a user has on a file. Use the checkboxes to specify read (4), write (2), and execute (1) permissions. The sum becomes the permission digit (0-7). To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
+        "Checks": "Users to Modify:Str,Permissions(R/W/X):Str,Object Path:Str",
         "Category": "File Management",
     },
     # "Anti-Virus": {"Definition": 'Enable this to score the competitor for installing an anti-virus. Not windows defender.',
@@ -687,8 +687,11 @@ class Config(Tk):
         r = 2
         for i, t in enumerate(entry[1]["Checks"]):
             modifyPageIn.grid_columnconfigure(i + 1, weight=1)
-            ttk.Label(modifyPageIn, text=t, font="Verdana 10 bold").grid(
-                row=2, column=i + 1
+            # Create a frame for each header label to match the structure of the content below
+            header_frame = ttk.Frame(modifyPageIn)
+            header_frame.grid(row=2, column=i + 1, sticky=EW)
+            ttk.Label(header_frame, text=t, font="Verdana 10 bold").grid(
+                row=0, column=0, sticky=W
             )
             r = i + 2
         ttk.Label(modifyPageIn, text="Remove", font="Verdana 10 bold").grid(
@@ -888,6 +891,55 @@ def load_modify_settings(frame, entry, name, idx):
             location_entry = ttk.Entry(modifyPageListRow, textvariable=entry[idx]["Checks"][t], state="readonly")
             location_entry.grid(row=0, column=r, sticky=EW)
             c = r + 1
+        elif t == "Permissions(R/W/X)":
+            # Create checkboxes for read, write, execute permissions
+            modifyPageListRow.grid_columnconfigure(r, weight=1)
+            perm_frame = ttk.Frame(modifyPageListRow, borderwidth=2, relief="groove", padding=5)
+            perm_frame.grid(row=0, column=r, sticky=EW, padx=2, pady=2)
+            
+            # # Add title label
+            # ttk.Label(perm_frame, text="Permissions(R/W/X)", font="Verdana 9 bold").grid(
+            #     row=0, column=0, columnspan=4, sticky=W, pady=(0, 5)
+            # )
+            
+            # Parse current permission value (0-7) into checkbox states
+            try:
+                perm_value = int(entry[idx]["Checks"][t].get() or "0")
+            except ValueError:
+                perm_value = 0
+            
+            # Create IntVars for each permission bit
+            read_var = IntVar(value=4 if (perm_value & 4) else 0)
+            write_var = IntVar(value=2 if (perm_value & 2) else 0)
+            exec_var = IntVar(value=1 if (perm_value & 1) else 0)
+            
+            # Function to update the permission string when checkboxes change
+            def update_permission(*args):
+                new_value = read_var.get() + write_var.get() + exec_var.get()
+                entry[idx]["Checks"][t].set(str(new_value))
+            
+            # Create checkboxes in row 1
+            ttk.Checkbutton(perm_frame, text="Read(4)", variable=read_var, 
+                          onvalue=4, offvalue=0, command=update_permission).grid(row=1, column=0, padx=2)
+            ttk.Checkbutton(perm_frame, text="Write(2)", variable=write_var,
+                          onvalue=2, offvalue=0, command=update_permission).grid(row=1, column=1, padx=2)
+            ttk.Checkbutton(perm_frame, text="Execute(1)", variable=exec_var,
+                          onvalue=1, offvalue=0, command=update_permission).grid(row=1, column=2, padx=2)
+            
+            # Label to show current octal value
+            perm_label = ttk.Label(perm_frame, text=f"({perm_value})")
+            perm_label.grid(row=1, column=3, padx=5)
+            
+            # Update label when permission changes
+            def update_label(*args):
+                update_permission()
+                perm_label.config(text=f"({entry[idx]['Checks'][t].get()})")
+            
+            read_var.trace('w', update_label)
+            write_var.trace('w', update_label)
+            exec_var.trace('w', update_label)
+            
+            c = r + 1
         else:
             # print(t)
             modifyPageListRow.grid_columnconfigure(r, weight=1)
@@ -1017,6 +1069,55 @@ def add_row(frame, entry, name):
             mod_frame.grid_columnconfigure(r, weight=1)
             location_entry = ttk.Entry(mod_frame, textvariable=entry[idx]["Checks"][t], state="readonly")
             location_entry.grid(row=0, column=r, sticky=EW)
+            c = r + 1
+        elif t == "Permissions(R/W/X)":
+            # Create checkboxes for read, write, execute permissions
+            mod_frame.grid_columnconfigure(r, weight=1)
+            perm_frame = ttk.Frame(mod_frame, borderwidth=2, relief="groove", padding=5)
+            perm_frame.grid(row=0, column=r, sticky=EW, padx=2, pady=2)
+            
+            # Add title label
+            ttk.Label(perm_frame, text="Permissions(R/W/X)", font="Verdana 9 bold").grid(
+                row=0, column=0, columnspan=4, sticky=W, pady=(0, 5)
+            )
+            
+            # Parse current permission value (0-7) into checkbox states
+            try:
+                perm_value = int(entry[idx]["Checks"][t].get() or "0")
+            except ValueError:
+                perm_value = 0
+            
+            # Create IntVars for each permission bit
+            read_var = IntVar(value=4 if (perm_value & 4) else 0)
+            write_var = IntVar(value=2 if (perm_value & 2) else 0)
+            exec_var = IntVar(value=1 if (perm_value & 1) else 0)
+            
+            # Function to update the permission string when checkboxes change
+            def update_permission(*args):
+                new_value = read_var.get() + write_var.get() + exec_var.get()
+                entry[idx]["Checks"][t].set(str(new_value))
+            
+            # Create checkboxes in row 1
+            ttk.Checkbutton(perm_frame, text="Read(4)", variable=read_var, 
+                          onvalue=4, offvalue=0, command=update_permission).grid(row=1, column=0, padx=2)
+            ttk.Checkbutton(perm_frame, text="Write(2)", variable=write_var,
+                          onvalue=2, offvalue=0, command=update_permission).grid(row=1, column=1, padx=2)
+            ttk.Checkbutton(perm_frame, text="Execute(1)", variable=exec_var,
+                          onvalue=1, offvalue=0, command=update_permission).grid(row=1, column=2, padx=2)
+            
+            # Label to show current octal value
+            perm_label = ttk.Label(perm_frame, text=f"({perm_value})")
+            perm_label.grid(row=1, column=3, padx=5)
+            
+            # Update label when permission changes
+            def update_label(*args):
+                update_permission()
+                perm_label.config(text=f"({entry[idx]['Checks'][t].get()})")
+            
+            read_var.trace('w', update_label)
+            write_var.trace('w', update_label)
+            exec_var.trace('w', update_label)
+            
             c = r + 1
         else:
             mod_frame.grid_columnconfigure(r, weight=1)
