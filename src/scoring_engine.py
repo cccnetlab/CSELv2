@@ -23,6 +23,7 @@ import shutil
 import warnings
 import json
 from inotify_simple import INotify, flags
+from pathlib import Path
 
 # Add parent directory to path for relative imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -529,31 +530,79 @@ def check_udp(host, port):
         return False
 
 
-def portVulns(vulnerability):
+def portVulns(vulnerability, name):
     """
-    Checks for open ports based on the provided vulnerabilities.
+    Checks for open or closed ports based on the provided vulnerabilities.
+    Handles both TCP and UDP protocols, and supports IPv4/IPv6 addresses.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
+        name (str): The check type - "Check Port Open" or "Check Port Closed"
     """
+    expect_open = (name == "Check Port Open")
+    
     for vuln in vulnerability:
         if vuln != 1:
-            if str.upper(vulnerability[vuln]["Protocol"]) == "TCP":
-                if (check_tcp(vulnerability[vuln]["IP"]), vulnerability[vuln]["Port"]):
-                    record_hit(
-                        "Port " + Vulnerabilities[vuln]["Port"] + " is opened.",
-                        vulnerability[vuln]["Points"],
-                    )
+            # Get configuration values with defaults for missing fields
+            protocol = vulnerability[vuln].get("Protocol", "TCP")
+            host = vulnerability[vuln].get("IP", "127.0.0.1")
+            port_str = vulnerability[vuln].get("Port", "")
+            program_name = vulnerability[vuln].get("Program Name", "")
+            
+            # Validate required fields
+            if not port_str:
+                print(f"Warning: Missing port for {name} vulnerability")
+                record_miss("Firewall Management")
+                continue
+            
+            try:
+                port = int(port_str)
+            except (ValueError, TypeError):
+                print(f"Warning: Invalid port '{port_str}' for {name}")
+                record_miss("Firewall Management")
+                continue
+            
+            # Handle special IP notations
+            # IPv6 localhost variants: [::], [::1], ::1, etc.
+            if host.startswith("[") and host.endswith("]"):
+                host = host[1:-1]  # Remove brackets: [::] -> ::
+            
+            # Map IPv6 localhost to IPv4 for compatibility
+            if host in ["::", "::1"]:
+                host = "127.0.0.1"
+            
+            # Check if port is open
+            is_open = False
+            protocol_upper = str.upper(protocol)
+            
+            try:
+                if protocol_upper == "TCP":
+                    is_open = check_tcp(host, port)
+                elif protocol_upper == "UDP":
+                    is_open = check_udp(host, port)
                 else:
+                    print(f"Warning: Unknown protocol '{protocol}' for port check")
                     record_miss("Firewall Management")
+                    continue
+            except Exception as e:
+                print(f"Error checking {protocol_upper} port {port} on {host}: {e}")
+                record_miss("Firewall Management")
+                continue
+            
+            # Determine if we should award points
+            # For "Check Port Open": award if port IS open
+            # For "Check Port Closed": award if port IS NOT open
+            should_award = (is_open == expect_open)
+            
+            if should_award:
+                state = "open" if expect_open else "closed"
+                display_name = program_name if program_name else f"Port {port}"
+                record_hit(
+                    f"{display_name} ({protocol_upper} port {port}) is {state}",
+                    vulnerability[vuln]["Points"],
+                )
             else:
-                if (check_udp(vulnerability[vuln]["IP"]), vulnerability[vuln]["Port"]):
-                    record_hit(
-                        "Port " + Vulnerabilities[vuln]["Port"] + " is opened.",
-                        vulnerability[vuln]["Points"],
-                    )
-                else:
-                    record_miss("Firewall Management")
+                record_miss("Firewall Management")
 
 
 def audit_check():
@@ -1569,7 +1618,6 @@ def update_check_period(vulnerability):
                 record_miss("Program Management")
 
 
-# check
 def add_text_to_file(vulnerability):
     """
     Checks if specific text has been added to a file and records hits/misses.
@@ -1606,7 +1654,6 @@ def add_text_to_file(vulnerability):
                 continue
 
 
-# check
 def remove_text_from_file(vulnerability):
     """
     Checks if specific text has been removed from a file and records hits/misses.
@@ -1645,28 +1692,77 @@ def remove_text_from_file(vulnerability):
 
 def start_up_apps(vulnerability):
     """
-    Checks if specific applications are set to run at startup and records hits/misses.
+    Checks if specific applications are disabled from running at startup.
+    
+    Logic:
+    - If app exists in /etc/xdg/autostart/ (global):
+      * Hit: Corresponding .desktop file exists in ~/.config/autostart/ with Hidden=true
+      * Miss: Otherwise
+    - If app doesn't exist in global directory:
+      * Hit: .desktop file exists in ~/.config/autostart/ with Hidden=true
+      * Miss: File doesn't exist, or Hidden=false, or no Hidden line
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
-    startup_apps = []
-    # List all files in the specified directory
-    file_list = os.listdir("/etc/xdg/autostart")
-    for filename in file_list:
-        if filename.endswith(".desktop"):
-            file_path = os.path.join("/etc/xdg/autostart", filename)
-            config = configparser.ConfigParser()
-            config.read(file_path)
-
-            # Read the application name and command
-            app_exec = config.get("Desktop Entry", "Exec")
-            startup_apps.append({"command": app_exec})
+    global_autostart_dir = Path("/etc/xdg/autostart")
+    
+    # Get the actual user's home directory (not root's when running with sudo)
+    sudo_user = os.environ.get('SUDO_USER')
+    if sudo_user:
+        user_home = Path(f"/home/{sudo_user}")
+    else:
+        user_home = Path.home()
+    
+    user_autostart_dir = user_home / ".config/autostart"
+    
     for vuln in vulnerability:
         if vuln != 1:
-            if vulnerability[vuln] not in start_up_apps:
+            program_to_check = vulnerability[vuln].get("Program Name", "")
+            if not program_to_check:
+                continue
+            
+            # Ensure .desktop extension
+            desktop_filename = program_to_check if program_to_check.endswith(".desktop") else f"{program_to_check}.desktop"
+            
+            global_desktop_path = global_autostart_dir / desktop_filename
+            user_desktop_path = user_autostart_dir / desktop_filename
+            is_disabled = False
+            
+            # Check if app exists in global directory
+            if global_desktop_path.exists():
+                # App exists globally - must have Hidden=true in user config
+                if user_desktop_path.exists():
+                    # Read file directly to enforce exact format: "[Desktop Entry]" and "Hidden=true"
+                    # No spaces, exact capitalization required
+                    try:
+                        with open(user_desktop_path, 'r') as f:
+                            content = f.read()
+                            # Check for exact strings "[Desktop Entry]" and "Hidden=true"
+                            is_disabled = "[Desktop Entry]" in content and "Hidden=true" in content
+                    except (IOError, PermissionError):
+                        is_disabled = False
+                else:
+                    is_disabled = False
+            else:
+                # App doesn't exist in global directory - check user directory
+                if user_desktop_path.exists():
+                    # Read file directly to enforce exact format: "[Desktop Entry]" and "Hidden=true"
+                    # No spaces, exact capitalization required
+                    try:
+                        with open(user_desktop_path, 'r') as f:
+                            content = f.read()
+                            # Check for exact strings "[Desktop Entry]" and "Hidden=true"
+                            is_disabled = "[Desktop Entry]" in content and "Hidden=true" in content
+                    except (IOError, PermissionError):
+                        is_disabled = False
+                else:
+                    is_disabled = False
+            
+            # Record hit or miss
+            if is_disabled:
                 record_hit(
-                    vulnerability[vuln]["Checks"] + " has been removed from start up",
+                    f"{program_to_check} has been disabled from startup",
                     vulnerability[vuln]["Points"],
                 )
             else:
@@ -3000,6 +3096,25 @@ def load_services():
 
 
 # check1
+def process_vulnerability(vuln, vulnerability_def):
+    """
+    Helper function to process a single vulnerability check.
+    Determines if the function needs 1 or 2 arguments and calls it appropriately.
+    
+    Args:
+        vuln: Vulnerability template object with .name property
+        vulnerability_def (dict): Dictionary mapping vulnerability names to their check functions
+    """
+    vulnerability = Vulnerabilities.get_option_table(vuln.name, False)
+    if vulnerability[1]["Enabled"]:
+        func = vulnerability_def[vuln.name]
+        # Check if function takes 1 or 2 arguments
+        if len(getfullargspec(func).args) == 1:
+            func(vulnerability)
+        else:
+            func(vulnerability, vuln.name)
+
+
 def account_management(vulnerabilities):
     """
     Manages user accounts based on the provided vulnerabilities and records hits/misses.
@@ -3019,19 +3134,10 @@ def account_management(vulnerabilities):
         "Critical Users": critical_users,
     }
     for vuln in vulnerabilities:
-        vulnerability = Vulnerabilities.get_option_table(vuln.name, False)
         if "Critical" in vuln.name:
             critical_items.append(vuln)
-        elif vulnerability[1]["Enabled"]:
-            if len(getfullargspec(vulnerability_def[vuln.name]).args) == 1:
-                vulnerability_def[vuln.name](
-                    vulnerability
-                    if "vulnerability"
-                    in getfullargspec(vulnerability_def[vuln.name]).args
-                    else vuln.name
-                )
-            else:
-                vulnerability_def[vuln.name](vulnerability, vuln.name)
+        else:
+            process_vulnerability(vuln, vulnerability_def)
 
 
 def local_policies(vulnerabilities):
@@ -3055,17 +3161,7 @@ def local_policies(vulnerabilities):
         "Audit": local_group_policy,
     }
     for vuln in vulnerabilities:
-        vulnerability = Vulnerabilities.get_option_table(vuln.name, False)
-        if vulnerability[1]["Enabled"]:
-            if len(getfullargspec(vulnerability_def[vuln.name]).args) == 1:
-                vulnerability_def[vuln.name](
-                    vulnerability
-                    if "vulnerability"
-                    in getfullargspec(vulnerability_def[vuln.name]).args
-                    else vuln.name
-                )
-            else:
-                vulnerability_def[vuln.name](vulnerability, vuln.name)
+        process_vulnerability(vuln, vulnerability_def)
 
 def program_management(vulnerabilities):
     """
@@ -3083,19 +3179,10 @@ def program_management(vulnerabilities):
     }
     # vulnerability_def = {"Good Program": programs, "Bad Program": programs, "Update Program": no_scoring_available, "Add Feature": no_scoring_available, "Remove Feature": no_scoring_available, "Services": manage_services}
     for vuln in vulnerabilities:
-        vulnerability = Vulnerabilities.get_option_table(vuln.name, False)
         if "Critical" in vuln.name:
             critical_items.append(vuln)
-        elif vulnerability[1]["Enabled"]:
-            if len(getfullargspec(vulnerability_def[vuln.name]).args) == 1:
-                vulnerability_def[vuln.name](
-                    vulnerability
-                    if "vulnerability"
-                    in getfullargspec(vulnerability_def[vuln.name]).args
-                    else vuln.name
-                )
-            else:
-                vulnerability_def[vuln.name](vulnerability, vuln.name)
+        else:
+            process_vulnerability(vuln, vulnerability_def)
 
 
 def file_management(vulnerabilities):
@@ -3116,17 +3203,7 @@ def file_management(vulnerabilities):
         "Check Startup": start_up_apps,
     }
     for vuln in vulnerabilities:
-        vulnerability = Vulnerabilities.get_option_table(vuln.name, False)
-        if vulnerability[1]["Enabled"]:
-            if len(getfullargspec(vulnerability_def[vuln.name]).args) == 1:
-                vulnerability_def[vuln.name](
-                    vulnerability
-                    if "vulnerability"
-                    in getfullargspec(vulnerability_def[vuln.name]).args
-                    else vuln.name
-                )
-            else:
-                vulnerability_def[vuln.name](vulnerability, vuln.name)
+        process_vulnerability(vuln, vulnerability_def)
 
 
 def firewall_management(vulnerabilities):
@@ -3144,17 +3221,7 @@ def firewall_management(vulnerabilities):
         "Check Port Closed": portVulns,
     }
     for vuln in vulnerabilities:
-        vulnerability = Vulnerabilities.get_option_table(vuln.name, False)
-        if vulnerability[1]["Enabled"]:
-            if len(getfullargspec(vulnerability_def[vuln.name]).args) == 1:
-                vulnerability_def[vuln.name](
-                    vulnerability
-                    if "vulnerability"
-                    in getfullargspec(vulnerability_def[vuln.name]).args
-                    else vuln.name
-                )
-            else:
-                vulnerability_def[vuln.name](vulnerability, vuln.name)
+        process_vulnerability(vuln, vulnerability_def)
 
 
 def critical_functions(vulnerabilities):

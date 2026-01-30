@@ -847,3 +847,60 @@ Scores competitors for properly configuring file or directory permissions for sp
 - [x] Test with non-existent file path, should record a miss and log error
 - [x] Test with non-existent username, should record a miss and log error
 - [x] Test with directory instead of file, should work identically
+
+## Check Startup
+**Function:** `start_up_apps(vulnerability)`
+
+Scores competitors for disabling unwanted applications from running at startup through Linux Mint's Startup Applications GUI or equivalent autostart mechanisms.
+
+**Implementation:**
+- Defines global autostart directory: `Path("/etc/xdg/autostart")` (system-wide autostart entries)
+- Determines user home directory properly when running under sudo:
+  - Checks `SUDO_USER` environment variable to get actual user (not root)
+  - Constructs user autostart path as `{user_home}/.config/autostart`
+  - Falls back to `Path.home()` if not running under sudo
+- Iterates through configured startup app vulnerabilities
+- Gets program name from `vulnerability[vuln].get("Program Name", "")`
+- Ensures `.desktop` extension is present (adds if missing)
+- Constructs paths for both global and user desktop files:
+  - `global_desktop_path = /etc/xdg/autostart/{program}.desktop`
+  - `user_desktop_path = ~/.config/autostart/{program}.desktop`
+
+**Scoring Behavior:**
+- Awards points when application is properly disabled (has `Hidden=true` in appropriate location)
+- Records miss if application is not disabled or configuration is incorrect
+
+**Configuration Files Checked:**
+1. `/etc/xdg/autostart/{program}.desktop` - System-wide autostart entries
+2. `~/.config/autostart/{program}.desktop` - User-specific overrides
+
+**Note:** When running as sudo, the engine must detect real user via `SUDO_USER` environment variable or it will default to root.
+
+**Tests:**
+
+**Test Case 1: App exists in global directory**
+- [x] Configure startup app check for program that exists in `/etc/xdg/autostart/` (e.g., `sticky.desktop`)
+- [x] Verify user config doesn't exist yet, should record a miss
+- [x] Disable app via Startup Applications GUI (or manually create `~/.config/autostart/update-notifier.desktop` with `Hidden=true`)
+- [x] Verify scoring engine records a hit
+- [x] Edit user config to set `Hidden=false`, should record a miss
+- [x] Edit user config to remove `Hidden` key entirely, should record a miss
+- [x] Restore `Hidden=true`, should record a hit
+- [x] Delete user config file entirely, should record a miss
+
+**Test Case 2: App doesn't exist in global directory**
+- [x] Configure startup app check for custom program not in `/etc/xdg/autostart/` (e.g., `custom-app.desktop`)
+- [x] Verify neither global nor user config exists, should record a miss
+- [x] Create `~/.config/autostart/custom-app.desktop` with `Hidden=false`, should record a miss
+- [x] Change to `Hidden=true`, should record a hit
+- [x] Remove `Hidden` key from file, should record a miss
+- [x] Delete user config file, should record a miss
+
+**Test Case 3: Edge cases**
+- [x] Configure program name without `.desktop` extension, verify extension is added automatically
+- [x] Configure program name with `.desktop` extension already present, verify no duplicate extension
+- [x] Test with `Hidden=TRUE` (uppercase), verify case-sensitive matching records a miss
+- [x] Test with `Hidden = true` (spaces around =), verify configparser handles it correctly, still miss.
+- [x] Test with malformed desktop file (missing `[Desktop Entry]` section), should record a miss
+- [x] Test with program name containing spaces or special characters
+- [x] Configure empty program name, verify it's skipped
