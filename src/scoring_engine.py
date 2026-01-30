@@ -1603,13 +1603,6 @@ def update_check_period(vulnerability):
     gsettings get com.linuxmint.updates refresh-schedule-enabled
     """
 
-    # --- get points from row 1 ---
-    pts = vulnerability[1].get("Points", 0)
-    try:
-        pts = int(pts)
-    except (TypeError, ValueError):
-        pts = 0
-
     # --- determine user to run gsettings as ---
     user = (
         os.environ.get("SUDO_USER")
@@ -1641,7 +1634,7 @@ def update_check_period(vulnerability):
 
     # --- scoring ---
     if enabled:
-        record_hit("Update check period is enabled", pts)
+        record_hit("Update check period is enabled", vulnerability[1]["Points"])
     else:
         record_miss("Program Management")
 
