@@ -1,7 +1,9 @@
 # CSEL
 ## Cyberpatriot Scoring Engine: Linux
 
-CSEL is a scoring engine written in Python for scoring Linux CyberPatriot-like images. It is configured by adding scoring options into the save_data.db and running the scoringEngine executable. It now includes a web page Score Report. It works with Ubuntu.
+CSEL is a scoring engine written in Python(currently python 3.12.3) for scoring Linux CyberPatriot-like images. It is configured by adding scoring options into the save_data.db and running the scoringEngine executable. It now includes a web page Score Report. It works with Ubuntu.
+
+*If making changes, please look at **DeveloperGuide.md** for more information*
 
 ## Scorable Actions
 ### Gaining Points
@@ -42,19 +44,26 @@ CSEL is a scoring engine written in Python for scoring Linux CyberPatriot-like i
 
 CSEL can be run with "silent misses" which simulates a CyberPatriot round where you have no idea where the points are until you earn them. It can also be run with the silent misses turned off which is helpful when you are debugging or when you have very inexperienced students who might benefit from the help. This mode gives you a general idea where the points are missing. CSEL can also create a scoreboard report that will be placed on the desktop, granting the user access to points gained or lost. 
 ##Install 
-## CLI
-1. Set up your image and put your vulnerabilities in place.
-3. Clone into CSEL by typing: sudo git clone https://github.com/Bryannnnn1313/CSELv2/configurator.git
-4. Run '''bash
-sudo run ./configurator
-''' to start the UI. 
-6. Once you have checked all the flags and click run, you can (and should) delete the configurator executable.
 
-## GUI
-1. To install download the Following
+# Installation and Usage
+## CLI(required)
+1. Set up your image and put your vulnerabilities in place.
+2. Clone into image by using: sudo git clone https://github.com/cccnetlab/CSELv2.git
+3. (Optional) Set up virtual environment for dependencies:
+   * For debian/Ubuntu: **apt install python3.12-venv** 
+      * Create venv: **python3 -m venv .venv** 
+      * Activate venv: **source .venv/bin/activate**
+4. Run `python3 build.py`(**!!!MAKE SURE TO NOT RUN SUDO!!!, will break venv**) to create binaries.
+5. Run `sudo bash dep_install.sh` to install all required dependencies.
+6. Run the configurator with `sudo .venv/bin/python3.12 src/configurator.py`. Make sure you are in your **HOME DIRECTORY** "CSELV2" or whatever it's named.
+7. Configure everything and then press **Commit**. Feel free to delete the configurator binary after.
+8. Finally, to set up the scoring machine service, run `sudo .venv/bin/python3.12 service_setup.py`. It should now create a simlink to the binary and run it as a service on startup.  
+### **Important Note**: 
+If you plan on using the **Check Kernel**, ***Good Program***, or ***Update Program*** vulnerabilities, please refer to the *SPECIAL SETUP* section
+
 **Important Note**: Your students _will_ be able to see the vulnerabilities if you leave the CSEL folder behind or if they cat the executable file that is created in /etc/CYBERPATRIOT. I tell my students where the file is and that they should stay away from it. It is practice, after all.
 
-## How to use 
+## Configurator Usage
 ### Landing Page
 ![Landing Page](https://github.com/Bryannnnn1313/CSELv2/blob/master/Config%201st%20Screen.png)
    - Commit will launch the ScoringEngine and force close the configurator
@@ -82,3 +91,17 @@ sudo run ./configurator
 ## Known issues and planned updates
 - Removing an empty flag from the modify page may break the Configurator
     - Temporary solution is delete the database and rerun the Configurator
+
+## Special Setup
+Due to netlabs having no internet, certain packages have to be cached first. Before you configure any programs you want students to install or update, you must cache them first:
+
+### Good Program:
+- Use `sudo apt install -d <pkg>` to download the package ahead of time so they can be installed without internet.
+- For snap packages, use `sudo snap download <pkg>` which will download and create the **.assert**
+- Run `sudo snap ack package_name.assert` in order to register the security signature, allowing for the eventual offline download.(Technically can be bypassed with the ***--dangerous*** flag during installation)
+
+### Check Kernel:
+- Using `sudo apt upgrade -d` will allow you to cache a system update, allowing students to do "sudo apt upgrade" when the time comes.
+
+### Update Program:
+- TODO

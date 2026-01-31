@@ -1,0 +1,28 @@
+# CSEL Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Database ORM
+sqlalchemy>=2.0.0
+
+# Cron job management
+python-crontab>=3.0.0
+
+# Themed Tkinter widgets
+ttkthemes>=3.2.0
+
+# Process and system utilities
+psutil>=5.9.0
+
+# PyInstaller for building binaries
+pyinstaller>=6.0.0
+
+# File system event monitoring
+inotify-simple>=1.3.5
+
+# Note: The following must be installed via system package manager (run dep_install.sh):
+# - python3-tk (for tkinter GUI support)
+# - lsb-release >=0.1.0 (system package for Linux distribution detection)
+# - libpwquality-tools (for password strength testing tools like pwscore)
+# - libpam-pwquality (PAM module for password quality enforcement)
+# - pamtester (for PAM configuration testing)
+# Ubuntu/Debian: bash dep_install.sh
