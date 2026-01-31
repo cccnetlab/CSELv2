@@ -1740,23 +1740,44 @@ def check_startup(vulnerability):
 
 def update_check_period(vulnerability):
     """
-    Checks the update check period setting and records hits/misses.
-    
-    Args:
-        vulnerability (list): A list of vulnerabilities to check.
+    Linux Mint:
+    gsettings get com.linuxmint.updates refresh-schedule-enabled
     """
-    for vuln in vulnerability:
-        if vuln != 1:
-            with open("/etc/apt/apt.conf.d/10periodic", "r") as config_file:
-                for line in config_file:
-                    # What is the key?
-                    if line.strip().startswith(key):
-                        _, value = line.strip().split(None, 1)
-                        val = value
-            if val == '"1";':
-                record_hit("Check Period is set to 1", vulnerability[vuln]["Points"])
-            else:
-                record_miss("Program Management")
+
+    # --- determine user to run gsettings as ---
+    user = (
+        os.environ.get("SUDO_USER")
+        or os.environ.get("USER")
+        or os.getlogin()
+    )
+
+    # --- run gsettings ---
+    try:
+        result = subprocess.run(
+            [
+                "sudo",
+                "-u",
+                user,
+                "gsettings",
+                "get",
+                "com.linuxmint.updates",
+                "refresh-schedule-enabled",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        enabled = result.stdout.strip().lower() == "true"
+
+    except Exception:
+        enabled = False
+
+    # --- scoring ---
+    if enabled:
+        record_hit("Update check period is enabled", vulnerability[1]["Points"])
+    else:
+        record_miss("Program Management")
 
 
 def add_text_to_file(vulnerability):
@@ -3317,6 +3338,7 @@ def program_management(vulnerabilities):
         "Bad Program": programs,
         "Update Program": programs,
         "Services": manage_services,
+        "Update Check Period": update_check_period,
     }
     # vulnerability_def = {"Good Program": programs, "Bad Program": programs, "Update Program": no_scoring_available, "Add Feature": no_scoring_available, "Remove Feature": no_scoring_available, "Services": manage_services}
     for vuln in vulnerabilities:
