@@ -509,31 +509,147 @@ def check_tcp(host, port):
 
 def check_udp(host, port):
     """
-    Checks if a UDP port is open on a given host.
+    Checks if a UDP port has a listening process.
+    
+    UDP is connectionless, so we cannot reliably test connectivity by sending packets.
+    Instead, we check if any process is actually listening on the port using ss/netstat.
+    This is more reliable than trying to send empty packets which most services ignore.
     
     Args:
-        host (str): The hostname or IP address to check.
+        host (str): The hostname or IP address to check (used for filtering).
         port (int): The UDP port number to check.
     
     Returns:
-        bool: True if the port is open, False otherwise.
+        bool: True if a process is listening on the port, False otherwise.
     """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(1)  # Set a timeout for the socket operations
     try:
-        sock.sendto(b"", (host, port))
-        data, addr = sock.recvfrom(1024)
-        sock.close()
-        return True
-    except socket.timeout:
-        sock.close()
+        # Use ss to check if any process is listening on this UDP port
+        result = subprocess.run(
+            ["ss", "-ulnp"],  # -u=UDP, -l=listening, -n=numeric, -p=processes
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        # Parse output looking for the port
+        # Format: "udp   UNCONN 0   0   127.0.0.53:53   0.0.0.0:*   users:..."
+        for line in result.stdout.split('\n'):
+            # Skip header and empty lines
+            if not line.strip() or line.startswith('State') or line.startswith('Netid'):
+                continue
+            
+            # Check if this line contains our port
+            # Look for patterns like "0.0.0.0:53", "127.0.0.1:53", "[::]:53", etc.
+            if f":{port}" in line or f":{port} " in line:
+                # Additional check: if a specific host was requested (not 0.0.0.0 or ::)
+                # verify it matches (but accept 0.0.0.0 and :: as wildcards)
+                if host not in ["0.0.0.0", "127.0.0.1", "::", "::1"]:
+                    # If specific host requested, check if line contains it
+                    if host not in line:
+                        continue
+                return True
+        
         return False
+        
+    except subprocess.CalledProcessError:
+        # If ss command fails, fall back to socket method
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(1)
+        try:
+            sock.sendto(b"", (host, port))
+            data, addr = sock.recvfrom(1024)
+            sock.close()
+            return True
+        except socket.timeout:
+            sock.close()
+            return False
+        except Exception:
+            sock.close()
+            return False
+
+
+def check_ufw_rule(port, protocol):
+    """
+    Checks UFW firewall rules to determine if a port is allowed or denied.
+    Checks for both protocol-specific rules (e.g., "53/tcp") and generic port rules (e.g., "53").
+    
+    Args:
+        port (int): The port number to check.
+        protocol (str): The protocol ("TCP" or "UDP").
+    
+    Returns:
+        str: "ALLOW" if port is explicitly allowed, "DENY" if explicitly denied,
+             "DEFAULT" if no specific rule exists (falls back to UFW default policy).
+    """
+    try:
+        # Run 'ufw status numbered' to get detailed rules
+        result = subprocess.run(
+            ["sudo", "ufw", "status", "numbered"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        output = result.stdout.lower()
+        protocol_lower = protocol.lower()
+        
+        # Parse UFW rules looking for port/protocol matches
+        # UFW output format examples:
+        # "[ 1] 22/tcp                     ALLOW IN    Anywhere"
+        # "[ 2] 53                         ALLOW IN    Anywhere"  (applies to both tcp and udp)
+        for line in output.split('\n'):
+            # Skip header lines and empty lines
+            if not line.strip() or 'status:' in line or '---' in line or 'to' in line.lower() and 'action' in line.lower():
+                continue
+            
+            # Check for protocol-specific rule (e.g., "53/tcp")
+            if f"{port}/{protocol_lower}" in line:
+                if "allow" in line:
+                    return "ALLOW"
+                elif "deny" in line or "reject" in line:
+                    return "DENY"
+            
+            # Check for generic port rule (e.g., "53" which applies to both tcp and udp)
+            # Use word boundaries to avoid matching partial port numbers (e.g., "53" shouldn't match "253")
+            # Look for patterns like " 53 " or " 53/" or "[ 53]" or start with digit/bracket then port then space/slash
+            import re
+            port_pattern = rf'(?:^|\s|\[)\s*{port}(?:\s|$|/)'
+            if re.search(port_pattern, line):
+                # Make sure this isn't a port/protocol line we already checked
+                if f"{port}/{protocol_lower}" not in line and f"{port}/tcp" not in line and f"{port}/udp" not in line:
+                    if "allow" in line:
+                        return "ALLOW"
+                    elif "deny" in line or "reject" in line:
+                        return "DENY"
+        
+        # No specific rule found, return default policy
+        # If UFW is active and no rule matches, default is typically DENY
+        # If UFW is inactive, we'll treat it as ALLOW
+        if "status: active" in output:
+            return "DEFAULT"  # Active firewall with no specific rule = default deny
+        else:
+            return "ALLOW"  # Inactive firewall = everything allowed
+            
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Could not check UFW rules: {e}")
+        return "ALLOW"  # If we can't check, assume allowed
+    except Exception as e:
+        print(f"Warning: Error checking UFW: {e}")
+        return "ALLOW"
 
 
 def portVulns(vulnerability, name):
     """
     Checks for open or closed ports based on the provided vulnerabilities.
     Handles both TCP and UDP protocols, and supports IPv4/IPv6 addresses.
+    
+    A port is considered OPEN only if:
+    - UFW allows the traffic (or UFW is inactive), AND
+    - The port is actually listening (socket connection succeeds)
+    
+    A port is considered CLOSED if:
+    - UFW blocks/denies the traffic, OR
+    - The port is not listening
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
@@ -545,11 +661,17 @@ def portVulns(vulnerability, name):
         if vuln != 1:
             # Get configuration values with defaults for missing fields
             protocol = vulnerability[vuln].get("Protocol", "TCP")
-            host = vulnerability[vuln].get("IP", "127.0.0.1")
+            host = vulnerability[vuln].get("IP", "")
+            print("DEBUG: Initial host ip notation:", host)
             port_str = vulnerability[vuln].get("Port", "")
             program_name = vulnerability[vuln].get("Program Name", "")
             
             # Validate required fields
+            if not host or not host.strip():
+                print(f"Warning: Missing or empty IP for {name} vulnerability")
+                record_miss("Firewall Management")
+                continue
+            
             if not port_str:
                 print(f"Warning: Missing port for {name} vulnerability")
                 record_miss("Firewall Management")
@@ -571,15 +693,20 @@ def portVulns(vulnerability, name):
             if host in ["::", "::1"]:
                 host = "127.0.0.1"
             
-            # Check if port is open
-            is_open = False
+            print(f"Checking for host ip notation {host}")
+
             protocol_upper = str.upper(protocol)
             
+            # Step 1: Check UFW firewall rules
+            ufw_rule = check_ufw_rule(port, protocol_upper)
+            
+            # Step 2: Check if port is actually listening
+            is_listening = False
             try:
                 if protocol_upper == "TCP":
-                    is_open = check_tcp(host, port)
+                    is_listening = check_tcp(host, port)
                 elif protocol_upper == "UDP":
-                    is_open = check_udp(host, port)
+                    is_listening = check_udp(host, port)
                 else:
                     print(f"Warning: Unknown protocol '{protocol}' for port check")
                     record_miss("Firewall Management")
@@ -589,9 +716,23 @@ def portVulns(vulnerability, name):
                 record_miss("Firewall Management")
                 continue
             
-            # Determine if we should award points
-            # For "Check Port Open": award if port IS open
-            # For "Check Port Closed": award if port IS NOT open
+            # Step 3: Determine if port is truly open or closed
+            # Port is OPEN if: UFW allows it AND it's listening
+            # Port is CLOSED if: UFW denies it OR it's not listening
+            if ufw_rule == "DENY":
+                # UFW explicitly blocks this port
+                is_open = False
+            elif ufw_rule == "ALLOW":
+                # UFW allows, check if listening
+                is_open = is_listening
+            else:  # ufw_rule == "DEFAULT"
+                # No specific rule, UFW active means default deny
+                # But if it's listening, something got through (maybe via ALLOW ALL or other rule)
+                is_open = is_listening
+            
+            # Step 4: Determine if we should award points
+            # For "Check Port Open": award if port IS open (UFW allows AND listening)
+            # For "Check Port Closed": award if port IS NOT open (UFW denies OR not listening)
             should_award = (is_open == expect_open)
             
             if should_award:
@@ -3272,8 +3413,6 @@ except:
     )
     sys.exit()
 
-total_points = 0
-total_vulnerabilities = 0
 prePoints = 0
 password_requirements_cache = {}  # Cache for password requirements extracted from vulnerabilities
 category_def = {

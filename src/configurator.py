@@ -891,6 +891,15 @@ def load_modify_settings(frame, entry, name, idx):
             location_entry = ttk.Entry(modifyPageListRow, textvariable=entry[idx]["Checks"][t], state="readonly")
             location_entry.grid(row=0, column=r, sticky=EW)
             c = r + 1
+        elif t == "Protocol":
+            modifyPageListRow.grid_columnconfigure(r, weight=1)
+            ttk.OptionMenu(
+                modifyPageListRow,
+                entry[idx]["Checks"][t],
+                entry[idx]["Checks"][t].get(),
+                "TCP", "UDP",
+            ).grid(row=0, column=r, sticky=EW)
+            c = r + 1
         elif t == "Permissions(R/W/X)":
             # Create checkboxes for read, write, execute permissions
             modifyPageListRow.grid_columnconfigure(r, weight=1)
@@ -1069,6 +1078,15 @@ def add_row(frame, entry, name):
             mod_frame.grid_columnconfigure(r, weight=1)
             location_entry = ttk.Entry(mod_frame, textvariable=entry[idx]["Checks"][t], state="readonly")
             location_entry.grid(row=0, column=r, sticky=EW)
+            c = r + 1
+        elif t == "Protocol":
+            mod_frame.grid_columnconfigure(r, weight=1)
+            ttk.OptionMenu(
+                mod_frame,
+                entry[idx]["Checks"][t],
+                entry[idx]["Checks"][t].get(),
+                "TCP", "UDP",
+            ).grid(row=0, column=r, sticky=EW)
             c = r + 1
         elif t == "Permissions(R/W/X)":
             # Create checkboxes for read, write, execute permissions

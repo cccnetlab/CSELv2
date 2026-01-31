@@ -904,3 +904,196 @@ Scores competitors for disabling unwanted applications from running at startup t
 - [x] Test with malformed desktop file (missing `[Desktop Entry]` section), should record a miss
 - [x] Test with program name containing spaces or special characters
 - [x] Configure empty program name, verify it's skipped
+
+# **Firewall Management**
+
+## Check Port Open
+**Function:** `portVulns(vulnerability, "Check Port Open")`
+
+Scores competitors for opening required network ports for legitimate services.
+
+**Implementation:**
+- Receives `name` parameter to differentiate between "Check Port Open" and "Check Port Closed"
+- Sets `expect_open = True` when name is "Check Port Open"
+- Iterates through configured port vulnerabilities
+- Extracts configuration with defaults
+- Translates special IPv6 notation
+- Checks UFW firewall rules using `check_ufw_rule(port, protocol)`:
+  - Returns "ALLOW" if port is explicitly allowed by UFW
+  - Returns "DENY" if port is explicitly denied/blocked by UFW
+  - Returns "DEFAULT" if no specific rule exists (UFW active = default deny)
+  - Returns "ALLOW" if UFW is inactive or cannot be checked
+- Checks if port is listening by calling appropriate check function based on protocol
+  - TCP: Uses socket connection test (`check_tcp`)
+  - UDP: Uses `ss -ulnp` to check for listening processes (more reliable than packet probing)
+- Determines if port is truly open:
+  - Port is OPEN only if: UFW allows traffic AND port is listening
+  - Port is CLOSED if: UFW denies traffic OR port is not listening
+- Awards points when: port IS open (both UFW allows AND listening)
+- Records miss when port is not truly open
+
+**Scoring Behavior:**
+- Awards points when BOTH conditions are met:
+  - UFW allows the traffic (or is inactive)
+  - Port is actually listening (socket connection succeeds)
+- Records miss if UFW blocks/denies the port (even if service is listening)
+- Records miss if port is not listening (even if UFW allows it)
+- Records miss if port configuration is invalid (missing port, invalid format)
+- Records miss if protocol is not recognized (only TCP and UDP supported)
+- Records miss if port check encounters an error
+- Display message includes program name (if provided), protocol, port number, and state
+
+**Tests:**
+
+**Test Case 1: TCP Port Open**
+- [x] Install openssh-server if not installed.
+- [x] Configure "Check Port Open" with Protocol="TCP", IP="0.0.0.0"(or whatever ip appears from ss), Port="22" (SSH usually running)
+- [x] If SSH is running, should record a hit
+- [x] Stop SSH with `sudo systemctl stop ssh`(might need to stop ssh.socket), wait for next cycle, should record a miss
+- [x] Start SSH with `sudo systemctl start ssh`(might need to start ssh.socket), wait for next cycle, should record a hit
+- [x] Use ufw to close port 22/TCP, should record a miss
+- [x] Configure port 9999 (likely closed), should record a miss
+- [x] Use `nc -l 9999` to open port 9999 in another terminal, should record a hit
+- [x] Kill nc process, should record a miss
+
+**Test Case 2: UDP Port Open**
+- [x] Configure "Check Port Open" with Protocol="UDP", IP="127.0.0.1", Port="53" (DNS)
+- [x] If DNS service running, may record a hit (UDP unreliable)
+- [x] Use ufw to close port 53, should record a miss
+
+**Test Case 3: IPv6 and Special Notation**
+- [x] Configure with IP="[::1]" (IPv6 localhost with brackets), should convert and check successfully
+- [x] Configure with IP="::" (IPv6 any address), should map to 127.0.0.1
+- [x] Configure with IP="::1" (IPv6 localhost without brackets), should map to 127.0.0.1
+
+**Test Case 4: Missing or Invalid Configuration**
+- [x] Configure with empty Port field, should record a miss and log warning
+- [x] Configure with Protocol="ICMP" (unsupported), should record a miss and log warning
+- [x] Configure with missing IP field, should record a miss
+- [ ] Configure with missing Protocol field, should default to TCP
+
+## Check Port Closed
+**Function:** `portVulns(vulnerability, "Check Port Closed")`
+
+Scores competitors for closing unnecessary or vulnerable network ports to improve security.
+
+**Implementation:**
+- Receives `name` parameter to differentiate between "Check Port Open" and "Check Port Closed"
+- Sets `expect_open = False` when name is "Check Port Closed"
+- Iterates through configured port vulnerabilities
+- Extracts configuration with defaults
+- Translates special IPv6 notation
+- Checks UFW firewall rules using `check_ufw_rule(port, protocol)`:
+  - Returns "ALLOW" if port is explicitly allowed by UFW
+  - Returns "DENY" if port is explicitly denied/blocked by UFW
+  - Returns "DEFAULT" if no specific rule exists (UFW active = default deny)
+  - Returns "ALLOW" if UFW is inactive or cannot be checked
+- Checks if port is listening by calling appropriate check function based on protocol
+  - TCP: Uses socket connection test (`check_tcp`)
+  - UDP: Uses `ss -ulnp` to check for listening processes (more reliable than packet probing)
+- Determines if port is truly open:
+  - Port is OPEN only if: UFW allows traffic AND port is listening
+  - Port is CLOSED if: UFW denies traffic OR port is not listening
+- Awards points when: port IS NOT open (either UFW denies OR not listening)
+- Records miss when port is still open (UFW allows AND listening)
+
+**Scoring Behavior:**
+- Awards points when EITHER condition is met:
+  - UFW blocks/denies the port (even if service is listening)
+  - Port is not listening (even if UFW allows it)
+- Awards points if both UFW blocks AND port not listening (doubly closed)
+- Records miss if both UFW allows the traffic AND port is listening
+- Records miss if port configuration is invalid (missing port, invalid format)
+- Records miss if protocol is not recognized (only TCP and UDP supported)
+- Records miss if port check encounters an error
+- Display message includes program name (if provided), protocol, port number, and state
+- **Opposite scoring from Check Port Open**: awards points when port is closed, not open
+
+**Note:** This vulnerability type is used to ensure unnecessary services are disabled. Commonly used for ports like Telnet (23), FTP (21), or other insecure services that should not be running.
+
+**Tests:**
+
+**Test Case 1: TCP Port Closed - Service Not Listening**
+- [ ] Configure "Check Port Closed" with Protocol="TCP", IP="127.0.0.1", Port="23" (Telnet, usually closed)
+- [ ] Verify port 23 is not listening with `sudo ss -tulnp | grep :23`, should record a hit
+- [ ] Install and start Telnet with `sudo apt install telnetd && sudo systemctl start telnetd`
+- [ ] If UFW allows port 23, should record a miss (listening AND allowed)
+- [ ] Stop Telnet with `sudo systemctl stop telnetd`, should record a hit (not listening)
+- [ ] Uninstall Telnet, should continue to record a hit
+
+**Test Case 1b: TCP Port Closed - UFW Blocking**
+- [ ] Configure "Check Port Closed" with Protocol="TCP", IP="127.0.0.1", Port="22" (SSH)
+- [ ] Ensure SSH is running with `sudo systemctl start ssh`
+- [ ] Run `sudo ufw allow 22/tcp`, should record a miss (UFW allows AND listening)
+- [ ] Run `sudo ufw deny 22/tcp`, wait for next cycle, should record a hit (UFW blocks)
+- [ ] Verify SSH still shows in `sudo ss -tulnp | grep :22` but score is a hit (firewall blocks it)
+- [ ] Stop SSH with `sudo systemctl stop ssh`, should still record a hit (doubly closed: UFW blocks AND not listening)
+- [ ] Run `sudo ufw delete deny 22/tcp`, should still record a hit (not listening)
+- [ ] Start SSH, should record a miss (listening AND no deny rule)
+
+**Test Case 2: Close Running Service**
+- [ ] Start a test service on port 8080 with `python3 -m http.server 8080` in background
+- [ ] Configure "Check Port Closed" for port 8080, should record a miss (port is open)
+- [ ] Kill the python process, wait for next cycle, should record a hit
+- [ ] Restart the service, should record a miss again
+
+**Test Case 3: UDP Port Closed**
+- [ ] Configure "Check Port Closed" with Protocol="UDP", IP="127.0.0.1", Port="9999" (likely closed)
+- [ ] Should record a hit (port closed)
+- [ ] Start UDP listener with `nc -u -l 9999`, may record a miss (UDP unreliable)
+- [ ] Kill nc process, should record a hit
+
+**Test Case 3: Missing or Invalid Configuration**
+- [ ] Configure with empty Port field, should record a miss and log warning
+- [ ] Configure with Port="-1" (invalid), should record a miss and log warning
+- [ ] Configure with Protocol="HTTP" (unsupported), should record a miss and log warning
+- [ ] Configure with missing IP field, should default to 127.0.0.1 and check that
+
+## Turn On Firewall
+**Function:** `firewallVulns(vulnerability, "Turn On Firewall")`
+
+Scores competitors for enabling the system firewall (UFW - Uncomplicated Firewall) to improve network security.
+
+**Implementation:**
+- Uses `subprocess.run()` to execute `sudo ufw status` command
+- Captures stdout from the command output
+- Searches for the substring " active" in the output (note: space before "active" is important)
+- Records hit if " active" is found in the status output
+- Records miss if UFW is inactive, disabled, or not installed
+- Handles `subprocess.CalledProcessError` exceptions gracefully and returns error message
+
+**Scoring Behavior:**
+- Awards points when UFW firewall is active
+- Records miss if UFW is inactive or not running
+- Records miss if UFW is not installed
+- Records miss if UFW check encounters an error (permission denied, command not found, etc.)
+
+**Tests:**
+
+**Basic Functionality:**
+- [ ] Check initial UFW status with `sudo ufw status`, note if active or inactive
+- [ ] Configure "Turn On Firewall" vulnerability in configurator
+- [ ] If UFW is already active, should record a hit immediately on next scoring cycle
+- [ ] If UFW is inactive, should record a miss
+
+**Enable/Disable Cycle:**
+- [ ] Ensure UFW is disabled: `sudo ufw disable`
+- [ ] Verify scoring engine shows miss
+- [ ] Enable UFW: `sudo ufw enable` (respond 'y' to prompt)
+- [ ] Wait for next scoring cycle, should record a hit
+- [ ] Disable UFW again: `sudo ufw disable`
+- [ ] Wait for next scoring cycle, should record a miss
+
+**Service Management:**
+- [ ] Enable UFW: `sudo ufw enable`
+- [ ] Verify hit is recorded
+- [ ] Stop UFW service: `sudo systemctl stop ufw`
+- [ ] Wait for next cycle, should record a miss (service not running)
+- [ ] Start UFW service: `sudo systemctl start ufw`
+- [ ] Wait for next cycle, should record a hit (service running again)
+
+**Edge Cases:**
+- [ ] Test with UFW not installed (if possible on test VM): `sudo apt remove ufw`
+- [ ] Should record a miss with error about command not found
+- [ ] Reinstall UFW: `sudo apt install ufw`
+- [ ] Enable and verify hit is recorded
