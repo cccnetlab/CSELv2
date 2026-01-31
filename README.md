@@ -56,8 +56,11 @@ CSEL can be run with "silent misses" which simulates a CyberPatriot round where 
 4. Run `python3 build.py`(**!!!MAKE SURE TO NOT RUN SUDO!!!, will break venv**) to create binaries.
 5. Run `sudo bash dep_install.sh` to install all required dependencies.
 6. Run the configurator with `sudo .venv/bin/python3.12 src/configurator.py`. Make sure you are in your **HOME DIRECTORY** "CSELV2" or whatever it's named.
-7. Configure everything and then press **Commit**. Feel free to delete the configurator binary after.
-8. Finally, to set up the scoring machine service, run `sudo .venv/bin/python3.12 service_setup.py`. It should now create a simlink to the binary and run it as a service on startup.  
+7. Configure everything and then press **Commit**.
+8. Run `sudo .venv/bin/python3.12 src/scoring_engine.py` from your home directory to start the scoring engine. If it is the first time running it.
+   * This should also create a **scoring report** executable which is linked to the scoring report html file.
+
+~~8. Finally, to set up the scoring machine service, run `sudo .venv/bin/python3.12 service_setup.py`. It should now create a simlink to the binary and run it as a service on startup.~~
 ### **Important Note**: 
 If you plan on using the **Check Kernel**, ***Good Program***, or ***Update Program*** vulnerabilities, please refer to the *SPECIAL SETUP* section
 

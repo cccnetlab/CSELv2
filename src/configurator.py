@@ -1378,7 +1378,6 @@ def commit_config():
         resource_path("ScoringEngineLinuxBig.png"),
         os.path.join(web_directory + "/ScoringEngineLinuxBig.png"),
     )
-    os.chmod("/etc/systemd/system/scoring_engine.service", 0o777)
     os.chmod(web_directory + "/CCC_logo.png", 0o777)
     os.chmod(web_directory + "/SoCalCCCC.png", 0o777)
     os.chmod(web_directory + "/ScoringEngineLinuxBig.png", 0o777)
@@ -1398,16 +1397,16 @@ def commit_config():
         int(os.environ["SUDO_UID"]),
     )
 
-    # Restart the scoring engine service to pick up new configuration immediately
-    try:
-        print("Restarting scoring_engine service to apply new configuration...")
-        # subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True) # TODO(later): Uncomment when done developing
-        print("✓ Scoring engine service restarted successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Warning: Could not restart scoring_engine service: {e.stderr.decode() if e.stderr else e}", file=sys.stderr)
-        print("The service may not be running. Configuration is still saved.", file=sys.stderr)
-    except Exception as e:
-        print(f"Warning: Unexpected error restarting service: {e}", file=sys.stderr)
+    # TODO: Uncomment when ready for service testing
+    # try:
+    #     print("Restarting scoring_engine service to apply new configuration...")
+    #     # subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True)
+    #     print("✓ Scoring engine service restarted successfully.")
+    # except subprocess.CalledProcessError as e:
+    #     print(f"Warning: Could not restart scoring_engine service: {e.stderr.decode() if e.stderr else e}", file=sys.stderr)
+    #     print("The service may not be running. Configuration is still saved.", file=sys.stderr)
+    # except Exception as e:
+    #     print(f"Warning: Unexpected error restarting service: {e}", file=sys.stderr)
     sys.exit()
 
 
