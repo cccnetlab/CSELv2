@@ -46,7 +46,15 @@ CSEL can be run with "silent misses" which simulates a CyberPatriot round where 
 ##Install 
 
 # Installation and Usage
-## CLI(required)
+
+**Run `sudo bash setup.sh` to automatically install the scoring engine service**
+* The configurator will automatically run the first time, make your configurations and press ***commit*** to apply them.
+   * The configurator can be run after setup anytime with `sudo .venv/bin/python3.12 src/configurator.py`
+
+### **Important Note**: 
+If you plan on using the **Check Kernel**, ***Good Program***, or ***Update Program*** vulnerabilities, please refer to the *SPECIAL SETUP* section
+
+## CLI(Alternative Manual Setup)
 1. Set up your image and put your vulnerabilities in place.
 2. Clone into image by using: sudo git clone https://github.com/cccnetlab/CSELv2.git
 3. (Optional) Set up virtual environment for dependencies:
