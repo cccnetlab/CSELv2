@@ -39,6 +39,9 @@ so you can have the scoring engine running while commiting configurations.
 developerMode = True  
 ########################
 
+# Global flag to track if completion notification has been sent
+completion_notification_sent = False
+
 
 # Path for storing password requirement configuration timestamps
 TIMESTAMP_FILE = "/etc/CYBERPATRIOT/password_config_timestamps.json"
@@ -85,6 +88,11 @@ def draw_head():
     Initializes the HTML structure and includes title and refresh meta tag.
     Writes the initial content to the score index file.
     """
+    # Ensure the directory exists before creating the file
+    score_dir = os.path.dirname(scoreIndex)
+    if not os.path.exists(score_dir):
+        os.makedirs(score_dir, exist_ok=True)
+    
     file = open(scoreIndex, "w+")
     file.write(
         '<!doctype html><html><head><title>CSEL Score Report</title><meta http-equiv="refresh" content="60"></head><body style="background-color:powderblue;">'
@@ -149,6 +157,10 @@ def display_html_sh(path):
     Args:
         path (str): The path to the user's desktop directory.
     """
+    # Ensure the Desktop directory exists
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+    
     with open(path + "ScoringReport.desktop", "w") as dt_f:
         dt_f.write(
             """[Desktop Entry]
@@ -199,6 +211,11 @@ def initialize_score_report():
     # Create the score report file path
     score_index_path = "/var/www/CYBERPATRIOT/ScoreReport.html"
     
+    # Ensure the directory exists
+    score_dir = os.path.dirname(score_index_path)
+    if not os.path.exists(score_dir):
+        os.makedirs(score_dir, exist_ok=True)
+    
     # Create the HTML file with updated totals
     with open(score_index_path, "w+") as file:
         file.write(
@@ -240,99 +257,72 @@ def check_runas():
     If not, prompts the user to run as admin and exits.
     """
     if not admin_test.isUserAdmin():
-        messagebox.showerror(
-            "Administrator Access Needed",
-            "Please make sure the scoring engine is running as admin.",
-        )
+        print("ERROR: Administrator Access Needed - Please make sure the scoring engine is running as admin.")
         exit(admin_test.runAsAdmin())
 
 
 def check_score():
-    """
-    Checks the current score against the menu settings.
-    Sends notifications if points are gained or lost.
-    Logs any exceptions that occur during the check.
-    """
-    global total_points, total_vulnerabilities
-    try:
-        current_user = os.getlogin()
-        getpwnam(current_user).pw_uid
-        menuSettings["Current Vulnerabilities"] = total_vulnerabilities
-        if total_points > menuSettings["Current Points"]:
-            menuSettings["Current Points"] = total_points
-            Settings.update_score(menuSettings)
+    global total_points, total_vulnerabilities, completion_notification_sent
+    
+    menuSettings["Current Vulnerabilities"] = total_vulnerabilities
+    
+    def send_notification(message):
+        """Send notification as the actual user using sudo"""
+        actual_user = os.environ.get("ACTUAL_USER")
+        actual_uid = os.environ.get("ACTUAL_UID")
+        
+        if not actual_user or not actual_uid:
+            # Fallback to SUDO_USER if ACTUAL_USER not set (running directly with sudo)
+            actual_user = os.environ.get("SUDO_USER")
+            if actual_user:
+                try:
+                    actual_uid = str(getpwnam(actual_user).pw_uid)
+                except:
+                    print("Warning: Cannot send notification - user info not available")
+                    return
+            else:
+                print("Warning: Cannot send notification - user info not available")
+                return
+        
+        try:
+            # Set up environment for the user's D-Bus session
+            env = os.environ.copy()
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{actual_uid}/bus"
+            env["DISPLAY"] = ":0"
+            env["XDG_RUNTIME_DIR"] = f"/run/user/{actual_uid}"
+            
+            # Run notify-send as the actual user
             subprocess.run(
-                [
-                    "sudo",
-                    "-u",
-                    os.environ["SUDO_USER"],
-                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus".format(
-                        getpwnam(current_user).pw_uid
-                    ),
-                    "notify-send",
-                    "-i",
-                    "utilities-terminal",
-                    "CyberPatriot",
-                    "You've gained points!",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=True,
+                ["sudo", "-u", actual_user, "notify-send", 
+                 "-i", "utilities-terminal", 
+                 "CyberPatriot", 
+                 message],
+                env=env,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
             )
-        elif total_points < menuSettings["Current Points"]:
-            menuSettings["Current Points"] = total_points
-            Settings.update_score(menuSettings)
-            subprocess.run(
-                [
-                    "sudo",
-                    "-u",
-                    os.environ["SUDO_USER"],
-                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus".format(
-                        getpwnam(current_user).pw_uid
-                    ),
-                    "notify-send",
-                    "-i",
-                    "utilities-terminal",
-                    "CyberPatriot",
-                    "You've lost points!",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=True,
-            )
-            if (
-                total_points == menuSettings["Tally Points"]
-                and total_vulnerabilities == menuSettings["Tally Vulnerabilities"]
-            ):
-                subprocess.run(
-                    [
-                        "sudo",
-                        "-u",
-                        os.environ["SUDO_USER"],
-                        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus".format(
-                            getpwnam(current_user).pw_uid
-                        ),
-                        "notify-send",
-                        "-i",
-                        "utilities-terminal",
-                        "CyberPatriot",
-                        "You've completed the image!",
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=True,
-                )
-    except:
-        f = open("scoring_engine.log", "w")
-        e = traceback.format_exc()
-        f.write(str(e))
-        f.close()
-        messagebox.showerror(
-            "Crash Report",
-            "The scoring engine has stopped working, a log has been saved to "
-            + os.path.abspath("scoring_engine.log"),
-        )
-        sys.exit()
+        except Exception as e:
+            print(f"Notification failed: {e}")
+    
+    if total_points > menuSettings["Current Points"]:
+        menuSettings["Current Points"] = total_points
+        Settings.update_score(menuSettings)
+        send_notification("You've gained points!")
+        
+    elif total_points < menuSettings["Current Points"]:
+        menuSettings["Current Points"] = total_points
+        Settings.update_score(menuSettings)
+        send_notification("You've lost points!")
+        # Reset completion notification if points are lost
+        completion_notification_sent = False
+        
+    if (total_points == menuSettings["Tally Points"] and 
+        total_vulnerabilities == menuSettings["Tally Vulnerabilities"]):
+        # Only send notification if it hasn't been sent yet
+        if not completion_notification_sent:
+            send_notification("You've completed the image!")
+            completion_notification_sent = True
 
 
 def write_to_html(message):
@@ -662,7 +652,6 @@ def portVulns(vulnerability, name):
             # Get configuration values with defaults for missing fields
             protocol = vulnerability[vuln].get("Protocol", "TCP")
             host = vulnerability[vuln].get("IP", "")
-            print("DEBUG: Initial host ip notation:", host)
             port_str = vulnerability[vuln].get("Port", "")
             program_name = vulnerability[vuln].get("Program Name", "")
             
@@ -1473,9 +1462,7 @@ def get_precise_password_change_time(username):
             
             # Search backwards (most recent first)
             for line in reversed(lines):
-                if f"password changed for {username}" in line:
-                    print(f"DEBUG: Found password change log line: {line.strip()}")
-                    
+                if f"password changed for {username}" in line:                    
                     # Parse timestamp - try ISO 8601 format first (systemd journal format)
                     # Format: 2026-01-07T12:54:31.696514-08:00 hostname ...
                     parts = line.split()
@@ -1502,8 +1489,7 @@ def get_precise_password_change_time(username):
                                 else:
                                     # No microseconds
                                     dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S")
-                                
-                                print(f"DEBUG: Successfully parsed ISO timestamp: {dt}")
+                        
                                 return dt
                         except ValueError as e:
                             print(f"DEBUG: Could not parse as ISO format: {e}")
@@ -1519,7 +1505,6 @@ def get_precise_password_change_time(username):
                                 timestamp_str = f"{month} {day} {current_year} {time_str}"
                                 
                                 dt = datetime.datetime.strptime(timestamp_str, "%b %d %Y %H:%M:%S")
-                                print(f"DEBUG: Successfully parsed syslog timestamp: {dt}")
                                 return dt
                         except ValueError as e:
                             print(f"DEBUG: Could not parse as syslog format: {e}")
@@ -1745,11 +1730,19 @@ def update_check_period(vulnerability):
     """
 
     # --- determine user to run gsettings as ---
-    user = (
-        os.environ.get("SUDO_USER")
-        or os.environ.get("USER")
-        or os.getlogin()
-    )
+    user = os.environ.get("SUDO_USER")
+    if not user:
+        user = os.environ.get("USER")
+    if not user:
+        try:
+            user = os.getlogin()
+        except OSError:
+            user = None
+    
+    if not user:
+        print("ERROR: Could not determine user for gsettings command")
+        record_miss("Program Management")
+        return
 
     # --- run gsettings ---
     try:
@@ -1934,19 +1927,58 @@ def start_up_apps(vulnerability):
 def check_hosts(vulnerability):
     """
     Checks the /etc/hosts file and records hits/misses based on its content.
+    Ignores standard default entries that are part of a normal hosts file.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
     hosts_file_path = "/etc/hosts"
-    with open(hosts_file_path, "r") as file:
-        hosts_content = file.read().strip()
-    for vuln in vulnerability:
-        if vuln != 1:
-            if not hosts_content:
-                record_hit("Hosts file has been cleared", vulnerability[vuln]["Points"])
-            else:
-                record_miss("File Management")
+    
+    # Define standard default patterns that should be ignored
+    # These are the default entries in a typical Linux mint hosts file
+    # TODO: Might need updating for other distributions
+    default_patterns = [
+        r'^\s*127\.0\.0\.1\s+(localhost|localhost\.localdomain|localhost4|localhost4\.localdomain4)(\s+\S+)*\s*$',
+        r'^\s*127\.0\.1\.1\s+\S+\s*$',
+        r'^\s*::1\s+(localhost|ip6-localhost|ip6-loopback|localhost\.localdomain|localhost6|localhost6\.localdomain6)(\s+(localhost|ip6-localhost|ip6-loopback|localhost\.localdomain|localhost6|localhost6\.localdomain6))*\s*$',
+        r'^\s*fe00::0\s+ip6-localnet\s*$',
+        r'^\s*ff00::0\s+ip6-mcastprefix\s*$',
+        r'^\s*ff02::1\s+ip6-allnodes\s*$',
+        r'^\s*ff02::2\s+ip6-allrouters\s*$',
+    ]
+    try:
+        with open(hosts_file_path, "r") as file:
+            lines = file.readlines()
+        
+        # Filter out empty lines, comments, and default entries
+        non_default_lines = []
+        for line in lines:
+            stripped_line = line.strip()
+            
+            # Skip empty lines and comment-only lines
+            if not stripped_line or stripped_line.startswith('#'):
+                continue
+            
+            # Check if this line matches any default pattern
+            is_default = False
+            for pattern in default_patterns:
+                if re.match(pattern, stripped_line, re.IGNORECASE):
+                    is_default = True
+                    break
+            
+            # If it doesn't match any default pattern, it's a non-default entry
+            if not is_default:
+                non_default_lines.append(stripped_line)
+        
+        # Score based on whether there are any non-default entries
+        if not non_default_lines:
+            record_hit("Hosts file has been cleared", vulnerability[1]["Points"])
+        else:
+            record_miss("File Management")
+    
+    except (IOError, PermissionError) as e:
+        print(f"ERROR: Could not read {hosts_file_path}: {e}")
+        record_miss("File Management")
 
 
 # fix
@@ -1963,7 +1995,6 @@ def critical_services(vulnerability):
             service_name = vulnerability[vuln]["Service Name"]
             expected_state = vulnerability[vuln]["Service State"]
             expected_start_mode = vulnerability[vuln]["Service Start Mode"]
-            print("DEBUG: found service to check:", service_name, expected_state, expected_start_mode)
             # Ensure service name has .service extension
             if not service_name.endswith(".service"):
                 service_name_full = service_name + ".service"
@@ -1975,7 +2006,6 @@ def critical_services(vulnerability):
                 # Check for exact match of base names
                 if service_name_full == service["unit"]:
                     actual_state = service["active"]
-                    print("DEBUG: actual state for", service["unit"], "is", actual_state)
                     # Get the service start mode
                     try:
                         result = subprocess.run(
@@ -2518,8 +2548,6 @@ def permission_checks(vulnerability):
                 
                 # Get the actual permission this user has on the file
                 actual_perm = get_user_permission_on_file(username, file_path)
-                print("DEBUG: Checking permissions for user", username, "on", file_path)
-                print("DEBUG: Expected permission:", expected_perm, "Actual permission:", actual_perm)
                 if actual_perm is None:
                     # Error getting permissions (file doesn't exist, user doesn't exist, etc.)
                     print(f"Warning: Could not check permissions for user '{username}' on '{file_path}'")
@@ -2547,14 +2575,7 @@ def no_scoring_available(name):
     Args:
         name (str): The name of the item with no scoring definition.
     """
-    messagebox.showerror(
-        ("No scoring for:", name),
-        (
-            "There is no scoring definition for",
-            name,
-            ". Please remove this option if you are the image creator, if you are a competitor ignore this message.",
-        ),
-    )
+    print(f"ERROR: No scoring definition for '{name}'. Please remove this option if you are the image creator, if you are a competitor ignore this message.")
 
 
 def load_policy_settings():
@@ -3428,11 +3449,7 @@ except:
     e = traceback.format_exc()
     f.write(str(e))
     f.close()
-    messagebox.showerror(
-        "Crash Report",
-        "The scoring engine has stopped working, a log has been saved to "
-        + os.path.abspath("scoring_engine.log"),
-    )
+    print("ERROR: The scoring engine has stopped working, a log has been saved to " + os.path.abspath("scoring_engine.log"))
     sys.exit()
 
 prePoints = 0
@@ -3514,8 +3531,4 @@ while True:
         e = traceback.format_exc()
         f.write(str(e))
         f.close()
-        messagebox.showerror(
-            "Crash Report",
-            "The scoring engine has stopped working, a log has been saved to "
-            + os.path.abspath("scoring_engine.log"),
-        )
+        print("ERROR: The scoring engine has stopped working, a log has been saved to " + os.path.abspath("scoring_engine.log"))

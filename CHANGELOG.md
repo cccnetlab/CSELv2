@@ -28,3 +28,13 @@ README and configurator changes to ensure smooth setup for new virtual machines
 - Updated README to change setup order to include service portion
 
 #### Update By @joshkimchifriedrice
+
+# 3.0.2(2026-2-2)
+## Release Summary
+Updated update check period and check hosts vulnerabilities to be more robust.
+
+## Changes
+- Added proper error handling to update check period
+- Fixed "check hosts" to record a hit for a non-empty but default file(Linux Mint 22.2 compatible)
+
+#### Update By @joshkimchifriedrice

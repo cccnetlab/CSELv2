@@ -8,6 +8,7 @@ import os
 import sys
 import shutil
 import subprocess
+import pwd
 
 def launch_binaries(service_name="scoring_engine"):
     """
@@ -91,6 +92,22 @@ def main():
         print("Please run with: sudo python3 setup_service.py")
         sys.exit(1)
 
+    # Get the actual user who ran sudo (not root)
+    actual_user = os.environ.get("SUDO_USER")
+    if not actual_user:
+        print("ERROR: Could not determine the user who ran this script.")
+        print("Please run with: sudo python3 service_setup.py")
+        sys.exit(1)
+    
+    # Get the user's UID for D-Bus path
+    try:
+        user_info = pwd.getpwnam(actual_user)
+        user_uid = user_info.pw_uid
+        print(f"Setting up service for user: {actual_user} (UID: {user_uid})")
+    except KeyError:
+        print(f"ERROR: Could not find user information for {actual_user}")
+        sys.exit(1)
+
     print("\n" + "=" * 60)
     print("\nSetting up scoring_engine as a systemd service...")
     print("\n" + "=" * 60)
@@ -117,23 +134,35 @@ def main():
     description = "CSEL Scoring Engine Service"
     working_dir = "/usr/local/bin" # TODO: Change this for relative pathing in configurator
 
-    # The content of the .service file
-    service_content = f"""
-    [Unit]
-    Description={description}
-    After=network.target
+    # The content of the .service file with D-Bus and display environment
+    service_content = f"""[Unit]
+Description={description}
+After=network.target
 
-    [Service]
-    ExecStart={target_path}
-    WorkingDirectory={working_dir}
-    Restart=on-failure
+[Service]
+ExecStart={target_path}
+WorkingDirectory={working_dir}
+Restart=on-failure
 
-    # Optional: Run as a specific user
-    # User=myuser
+# Run as root for system access
+User=root
 
-    [Install]
-    WantedBy=multi-user.target
-    """
+# Store the actual user info for notifications and file ownership
+Environment="ACTUAL_USER={actual_user}"
+Environment="ACTUAL_UID={user_uid}"
+Environment="SUDO_USER={actual_user}"
+Environment="SUDO_UID={user_uid}"
+Environment="DISPLAY=:0"
+Environment="XDG_RUNTIME_DIR=/run/user/{user_uid}"
+
+# Add logging for debugging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=scoring_engine
+
+[Install]
+WantedBy=multi-user.target
+"""
 
     # Attempt to create the service file
     try:
@@ -167,13 +196,9 @@ def main():
     # Setup CyberPatriot assets if not already present
     setup_cyberpatriot_assets(PROJECT_ROOT)
 
-    # Finally, launch the binaries
-    response = input("\nWould you like to launch the binaries now? (y/N): ")
-    if response.lower() != 'y':
-        print("Setup complete. You can launch the binaries later.")
-        sys.exit(0)
-    else:
-        launch_binaries()
+    print("Service Setup Complete")
+    sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

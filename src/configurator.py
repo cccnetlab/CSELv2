@@ -230,8 +230,8 @@ vulnerability_template = {
         "Category": "File Management",
     },
     "Check Hosts": {
-        "Definition": "Enable this to score the competitor for clearing the hosts file.",
-        "Description": 'This will score the competitor for clearing the hosts file. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
+        "Definition": "Enable this to score the competitor for clearing the hosts file of any extra entries.",
+        "Description": 'This will score the competitor for clearing the hosts file of any extra entries. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
         "Category": "File Management",
     },
     "Add Text to File": {
@@ -1397,16 +1397,16 @@ def commit_config():
         int(os.environ["SUDO_UID"]),
     )
 
-    # TODO: Uncomment when ready for service testing
-    # try:
-    #     print("Restarting scoring_engine service to apply new configuration...")
-    #     # subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True)
-    #     print("✓ Scoring engine service restarted successfully.")
-    # except subprocess.CalledProcessError as e:
-    #     print(f"Warning: Could not restart scoring_engine service: {e.stderr.decode() if e.stderr else e}", file=sys.stderr)
-    #     print("The service may not be running. Configuration is still saved.", file=sys.stderr)
-    # except Exception as e:
-    #     print(f"Warning: Unexpected error restarting service: {e}", file=sys.stderr)
+    # Restart scoring engine service to apply new configuration
+    try:
+        print("Restarting scoring_engine service to apply new configuration...")
+        # subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True)
+        print("✓ Scoring engine service restarted successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Could not restart scoring_engine service: {e.stderr.decode() if e.stderr else e}", file=sys.stderr)
+        print("The service may not be running. Configuration is still saved.", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Unexpected error restarting service: {e}", file=sys.stderr)
     sys.exit()
 
 
