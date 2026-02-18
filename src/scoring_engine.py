@@ -29,6 +29,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src import admin_test
 from src import db_handler
+from src import pamtester
 
 ### DEVELOPER TOOL ###
 """ 
@@ -36,7 +37,7 @@ Set to True to enable developer mode features,
 will refresh database to match configurator updates on every iteration, 
 so you can have the scoring engine running while commiting configurations.
 """
-developerMode = True  
+developerMode = False
 ########################
 
 # Global flag to track if completion notification has been sent
@@ -1028,7 +1029,7 @@ def local_group_policy(vulnerability, name):
                     minlen_result = test_results.get('minlen', {})
                     configured = minlen_result.get('configured', False)
                     enforced = minlen_result.get('enforced', False)
-                    actual_value = minlen_result.get('actual_value', 0);
+                    actual_value = minlen_result.get('actual_value', 0)
                     
                     # Check if the actual configured value matches the expected value
                     if configured and actual_value == expected_value:
@@ -1064,6 +1065,18 @@ def local_group_policy(vulnerability, name):
                     return
                 
                 try:
+                    # First, attempt an active PAM enforcement test with pamtester
+                    pamtester_result = pamtester.test_max_login_tries_with_pamtester(expected_value)
+                    if pamtester_result is True:
+                        record_hit(
+                            f"Account lockout threshold is enforced after {expected_value} failed attempts.",
+                            vulnerability[1]["Points"],
+                        )
+                        return
+                    elif pamtester_result is False:
+                        record_miss("Local Policy")
+                        return
+
                     # Priority 1: Check pam_faillock.so deny parameter in /etc/pam.d/common-auth
                     deny_value = common_auth_dict.get("deny")
                     
@@ -2161,7 +2174,7 @@ def check_kernel(vulnerability):
     try:
         # Step 1: Get the currently running kernel
         running_kernel = platform.uname().release
-        print(f"Running kernel: {running_kernel}")
+        # print(f"Running kernel: {running_kernel}")
         
         # Step 1.5: Detect Ubuntu base version (important for derivatives like Mint)
         ubuntu_version = None
@@ -2193,13 +2206,13 @@ def check_kernel(vulnerability):
             }
             
             # Prefer UBUNTU_CODENAME mapping, fallback to VERSION_ID
-            if ubuntu_codename and ubuntu_codename in codename_to_version:
-                ubuntu_version = codename_to_version[ubuntu_codename]
-                print(f"Detected Ubuntu base: {ubuntu_version} (codename: {ubuntu_codename})")
-            elif ubuntu_version:
-                print(f"Detected Ubuntu version: {ubuntu_version}")
-            else:
-                print("Warning: Could not determine Ubuntu version")
+            # if ubuntu_codename and ubuntu_codename in codename_to_version:
+            #     ubuntu_version = codename_to_version[ubuntu_codename]
+            #     print(f"Detected Ubuntu base: {ubuntu_version} (codename: {ubuntu_codename})")
+            # elif ubuntu_version:
+            #     print(f"Detected Ubuntu version: {ubuntu_version}")
+            # else:
+            #     print("Warning: Could not determine Ubuntu version")
                 
         except FileNotFoundError:
             print("Warning: Could not detect Ubuntu version from /etc/os-release")
@@ -2241,13 +2254,13 @@ def check_kernel(vulnerability):
         # Determine which meta-package to query
         if uses_hwe:
             meta_package = hwe_package_name
-            print(f"System uses HWE kernel track: {meta_package}")
+            # print(f"System uses HWE kernel track: {meta_package}")
         else:
             meta_package = "linux-image-generic"
-            print("System uses standard kernel track")
+            # print("System uses standard kernel track")
         
         # Step 3: Query apt cache for latest available kernel version
-        print(f"Querying repositories for latest {meta_package} version...")
+        # print(f"Querying repositories for latest {meta_package} version...")
         apt_result = subprocess.run(
             ["apt-cache", "policy", meta_package],
             capture_output=True,
@@ -2263,12 +2276,12 @@ def check_kernel(vulnerability):
                 break
         
         if not latest_available_version or latest_available_version == "(none)":
-            print("ERROR: Could not determine latest available kernel version")
-            print("Ensure internet connection is available and 'sudo apt update' has been run")
+            # print("ERROR: Could not determine latest available kernel version")
+            # print("Ensure internet connection is available and 'sudo apt update' has been run")
             record_miss("Local Policy")
             return
         
-        print(f"Latest available kernel meta-package version: {latest_available_version}")
+        # print(f"Latest available kernel meta-package version: {latest_available_version}")
         
         # Step 4: Determine the actual kernel image package version from the meta-package
         depends_result = subprocess.run(
@@ -2294,7 +2307,7 @@ def check_kernel(vulnerability):
         
         # Extract version from package name
         latest_kernel_version = latest_kernel_image.replace("linux-image-", "").replace("-generic", "")
-        print(f"Latest available kernel version: {latest_kernel_version}")
+        # print(f"Latest available kernel version: {latest_kernel_version}")
         
         # Step 5: Check if the latest kernel package is installed
         installed_check = subprocess.run(
@@ -2311,8 +2324,8 @@ def check_kernel(vulnerability):
                     break
         
         if not is_installed:
-            print(f"Latest kernel {latest_kernel_image} is NOT installed")
-            print(f"Run 'sudo apt update && sudo apt upgrade' to install")
+            # print(f"Latest kernel {latest_kernel_image} is NOT installed")
+            # print(f"Run 'sudo apt update && sudo apt upgrade' to install")
             record_miss("Local Policy")
             return
         
@@ -2320,14 +2333,14 @@ def check_kernel(vulnerability):
         
         # Step 6: Check if the installed latest kernel is actually running
         if not is_kernel_running(latest_kernel_version, running_kernel):
-            print(f"Latest kernel {latest_kernel_version} is installed but NOT running")
-            print(f"Currently running: {running_kernel}")
-            print("Reboot required to load the new kernel")
+            # print(f"Latest kernel {latest_kernel_version} is installed but NOT running")
+            # print(f"Currently running: {running_kernel}")
+            # print("Reboot required to load the new kernel")
             record_miss("Local Policy")
             return
         
         # Step 7: Success - latest kernel is both installed and running
-        print(f"✓ Kernel updated to latest version and running: {running_kernel}")
+        # print(f"✓ Kernel updated to latest version and running: {running_kernel}")
         record_hit(
             f"Kernel updated to latest version ({running_kernel})",
             vulnerability[1]["Points"]
@@ -2754,50 +2767,6 @@ def get_chage_info():
             pass
         
         print(f"Warning: Could not get chage info using test user: {e}")
-        return {}
-
-
-def get_faillock_info(username="root"):
-    """
-    Gets account lockout information using faillock command.
-    This shows the actual effective lockout settings.
-    
-    Args:
-        username (str): The username to check. Defaults to "root".
-    
-    Returns:
-        dict: Dictionary containing faillock information, or empty dict on error.
-    """
-    try:
-        result = subprocess.run(
-            ["faillock", "--user", username],
-            capture_output=True,
-            text=True,
-            check=False  # Don't raise on non-zero exit (user might not exist)
-        )
-        
-        faillock_info = {
-            "failed_attempts": 0,
-            "locked": False
-        }
-        
-        # Parse the output for failed attempts
-        for line in result.stdout.splitlines():
-            if "failures:" in line.lower():
-                try:
-                    # Extract number from line like "When                Type  Source                                           Valid"
-                    # or actual failure count
-                    parts = line.split()
-                    for i, part in enumerate(parts):
-                        if part.isdigit():
-                            faillock_info["failed_attempts"] = int(part)
-                            break
-                except (ValueError, IndexError):
-                    pass
-                    
-        return faillock_info
-    except FileNotFoundError:
-        print("Warning: faillock command not found. Install libpam-modules for lockout checking.")
         return {}
 
 
@@ -3431,7 +3400,10 @@ try:
     categories = Categories.get_categories()
     Vulnerabilities = db_handler.OptionTables()
     Vulnerabilities.initialize_option_table()
-except:
+except KeyboardInterrupt:
+    print("INFO: Scoring engine stopped by user.")
+    sys.exit(0)
+except Exception:
     f = open("scoring_engine.log", "a")
     e = traceback.format_exc()
     f.write(str(e))
@@ -3475,12 +3447,14 @@ program_versions = load_versions()
 
 while True:
     try:
+        # Reset scoring totals each loop to avoid cumulative double counting
+        total_points = 0
+        total_vulnerabilities = 0
+        critical_items = []
+
         # DEVELOPING: Reload settings from database each iteration to catch configuration updates
         if developerMode:
             menuSettings = Settings.get_settings(False)
-            total_points = 0
-            total_vulnerabilities = 0
-            critical_items = []
             # Build password requirements cache from all categories
             password_requirements_cache = build_password_requirements_cache(categories, Vulnerabilities)
         
@@ -3513,7 +3487,10 @@ while True:
         check_score()
         print("Scoring Engine loop 2nd:" + str(iterations))
         time.sleep(10)
-    except:
+    except KeyboardInterrupt:
+        print("INFO: Scoring engine stopped by user.")
+        sys.exit(0)
+    except Exception:
         f = open("scoring_engine.log", "w")
         e = traceback.format_exc()
         f.write(str(e))
