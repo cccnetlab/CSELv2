@@ -176,12 +176,12 @@ echo ""
 echo "Step 8: Resetting database..."
 echo "=========================================="
 
-if [ -f "${SCRIPT_DIR}/useful_scripts/reset_database.py" ]; then
+if [ -f "${SCRIPT_DIR}/reset_database.py" ]; then
     # Check if venv exists
     if [ -d "${SCRIPT_DIR}/.venv" ]; then
         echo "Running database reset script..."
         # Run reset_database with 'yes' confirmation
-        echo "yes" | "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/useful_scripts/reset_database.py" || {
+        echo "yes" | "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/reset_database.py" || {
             echo "⚠️  Database reset had issues, but continuing..."
         }
         echo "✓ Database reset complete"

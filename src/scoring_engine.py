@@ -1064,38 +1064,25 @@ def local_group_policy(vulnerability, name):
                     return
                 
                 try:
-                    # Use faillock to verify lockout is working (Step 2)
-                    faillock_info = get_faillock_info("root")
+                    # Priority 1: Check pam_faillock.so deny parameter in /etc/pam.d/common-auth
+                    deny_value = common_auth_dict.get("deny")
                     
-                    # Check common-auth first (preferred for faillock), then common-password PAM, then LOGIN_RETRIES
-                    deny_value = common_auth_dict.get("deny") or pam_settings_dict.get("deny")
+                    # Priority 2: Fall back to /etc/security/faillock.conf
+                    if not deny_value:
+                        deny_value = faillock_settings_content.get("deny")
+                    
                     if deny_value:
                         actual_value = int(deny_value)
                         if actual_value == expected_value:
-                            # Verify faillock is available to enforce this
-                            if faillock_info is not None:
-                                record_hit(
-                                    f"Account lockout threshold is set to {actual_value} failed attempts.", 
-                                    vulnerability[1]["Points"]
-                                )
-                            else:
-                                # Config is set but faillock not available
-                                record_hit(
-                                    f"Account lockout threshold is configured to {actual_value} failed attempts.", 
-                                    vulnerability[1]["Points"]
-                                )
-                        else:
-                            record_miss("Local Policy")
-                    else:
-                        # Fallback to LOGIN_RETRIES from login.defs
-                        actual_value = int(policy_settings_dict.get("LOGIN_RETRIES", 0))
-                        if actual_value == expected_value:
                             record_hit(
-                                f"Maximum login tries is set to {actual_value}.", 
+                                f"Account lockout threshold is set to {actual_value} failed attempts.", 
                                 vulnerability[1]["Points"]
                             )
                         else:
                             record_miss("Local Policy")
+                    else:
+                        # No deny configuration found in either location
+                        record_miss("Local Policy")
                 except (ValueError, TypeError, KeyError) as e:
                     print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
