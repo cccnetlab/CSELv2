@@ -3730,6 +3730,7 @@ def file_management(vulnerabilities):
         "Forensic": forensic_question,
         "Check Hosts": check_hosts,
         "Bad File/Directory": bad_file,
+        "Bad File": bad_file,
         "Add Text to File": add_text_to_file,
         "Remove Text From File": remove_text_from_file,
         "File Permissions": permission_checks,
