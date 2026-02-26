@@ -363,6 +363,8 @@ Scores competitors for configuring how long accounts remain locked after exceedi
 
 **Note:** Works with pam_faillock module. unlock_time value is in seconds (e.g., 900 = 15 minutes).
 
+**Tests:**
+
 ## Lockout Reset Duration
 **Function:** `local_group_policy(vulnerability, "Lockout Reset Duration")`
 
@@ -748,6 +750,9 @@ Scores competitors for removing unauthorized or malicious files from the system.
 - [x] Configure a bad directory that doesn't exit, should record a hit
 - [x] Create the bad directory, should record a miss
 - [x] Remove the bad directory using `rm -rf`, should record a hit
+
+## Check Hosts
+TO BE DETERMINED
 
 ## Add Text to File
 **Function:** `add_text_to_file(vulnerability)`

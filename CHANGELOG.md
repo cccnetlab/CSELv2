@@ -37,4 +37,19 @@ Updated update check period and check hosts vulnerabilities to be more robust.
 - Added proper error handling to update check period
 - Fixed "check hosts" to record a hit for a non-empty but default file(Linux Mint 22.2 compatible)
 
+## Known Issues
+- Service doesn't work
+
 #### Update By @joshkimchifriedrice
+
+# 3.1.0(2026-2-26)
+# Release Summary
+Added the scoring engine as a service. Fixed vulnerability issues. Streamlined installation.
+
+## Changes
+- Scoring engine service now enabled after installation.
+- ***New*** file `setup.sh` which can be run on a fresh machine to automatically setup engine(see README).
+- Implemented robust vulnerability checking using pamtester in `src/pamtester.py` for login retries.
+- Added configurator clarity for **Forensics** in configurator.
+- Added inotify functionality for `/etc/ssh/sshd_config` and fixed permitRootLogin checking to score by default.
+- Added fixed incorrect ^C (SIGINT) handling.
