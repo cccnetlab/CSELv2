@@ -155,7 +155,7 @@ vulnerability_template = {
     # "Password Complexity": {"Definition": 'Enable this to score the competitor for enabling password complexity.',
     #                        "Category": 'Local Policy'},
     "Audit": {
-        "Definition": "Enable this to score the competitor for setting account login audit to success and failure.",
+        "Definition": "Enable this to score the competitor for setting account login audit to success and failure.(Must be installed already)",
         "Category": "Local Policy",
     },
     "Disable SSH Root Login": {
@@ -219,7 +219,7 @@ vulnerability_template = {
     #                       "Category": 'Program Management'},
     "Forensic": {
         "Definition": "Enable this to score the competitor for answering forensic a question.",
-        "Description": 'This will score the competitor for answering forensic questions. To add more questions press the "Add" button. To remove questions press the "X" button next to the question you want to remove. The location will automatically be set to the desktop location configured in the main page.',
+        "Description": 'This will score the competitor for answering forensic questions. To add more questions press the "Add" button. To remove questions press the "X" button next to the question you want to remove. The location will automatically be set to the desktop location configured in the main page. A file will automatically be named and added to the desktop upon saving or committing the configuration.',
         "Checks": "Question:Str,Answers:Str,Location:Str",
         "Category": "File Management",
     },

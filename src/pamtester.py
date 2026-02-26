@@ -32,23 +32,15 @@ def get_faillock_info(username="root"):
 
 		faillock_info = {
 			"failed_attempts": 0,
-			"locked": False
 		}
 
-		# Parse the output for failed attempts
+		# Parse the output for failed attempts.
+		# faillock outputs one row per failure entry; each row ends with
+		# "V" (valid/counted) or "I" (invalid/not counted). Count the "V" lines.
 		for line in result.stdout.splitlines():
-			if "failures:" in line.lower():
-				try:
-					parts = line.split()
-					for part in parts:
-						if part.isdigit():
-							faillock_info["failed_attempts"] = int(part)
-							break
-				except (ValueError, IndexError):
-					pass
-			line_lower = line.lower()
-			if "locked" in line_lower and "not" not in line_lower and "no" not in line_lower:
-				faillock_info["locked"] = True
+			stripped = line.strip()
+			if stripped.endswith(" V") or stripped == "V":
+				faillock_info["failed_attempts"] += 1
 
 		return faillock_info
 	except FileNotFoundError:
@@ -116,22 +108,14 @@ def generate_pamtest_password():
 
 def pamtester_authenticate(service, username, password, run_as_user=None):
     """
-    Runs pamtester authenticate for a given service/user/password.
-    If run_as_user is provided, runs pamtester as that user via su so
-    pam_faillock tracks failures against that user's UID without
-    retaining root privileges.
-    Returns (returncode, stdout, stderr).
+    Runs pamtester to authenticate username against a PAM service.
+    If run_as_user is set, uses runuser to drop privileges to that UID first
+    so pam_faillock records failures for a non-root process (avoids root bypass).
     """
     if run_as_user:
-        # Use su to fully drop to the target user's UID so pam_faillock
-        # records failures correctly. sudo retains root context and bypasses
-        # faillock tracking.
-        cmd = ["su", "-s", "/bin/bash", "-c",
-               f"pamtester {service} {username} authenticate",
-               run_as_user]
+        cmd = ["runuser", "-u", run_as_user, "--", "pamtester", service, username, "authenticate"]
     else:
         cmd = ["pamtester", service, username, "authenticate"]
-
     result = subprocess.run(
         cmd,
         input=f"{password}\n",
@@ -142,35 +126,80 @@ def pamtester_authenticate(service, username, password, run_as_user=None):
     return result.returncode, result.stdout, result.stderr
 
 
+# --- nobody approach (commented out) ---
+# def set_nobody_password(password):
+# 	"""
+# 	Temporarily sets a password for the nobody user so pamtester can
+# 	authenticate as nobody. Returns True on success, False otherwise.
+# 	"""
+# 	result = subprocess.run(
+# 		["chpasswd"],
+# 		input=f"nobody:{password}",
+# 		capture_output=True,
+# 		text=True,
+# 		check=False
+# 	)
+# 	if result.returncode != 0:
+# 		print(f"Warning: Could not set password for nobody: {result.stderr.strip()}")
+# 		return False
+# 	# Explicitly unlock the account - chpasswd sets the hash but may not
+# 	# remove the '!' lock prefix in shadow, which pam_unix treats as locked.
+# 	unlock_result = subprocess.run(
+# 		["passwd", "-u", "nobody"],
+# 		capture_output=True,
+# 		text=True,
+# 		check=False
+# 	)
+# 	if unlock_result.returncode != 0:
+# 		print(f"Warning: Could not unlock nobody account: {unlock_result.stderr.strip()}")
+# 	return True
+#
+# def lock_nobody_account():
+# 	"""
+# 	Locks the nobody account by disabling its password.
+# 	This restores nobody to its default locked state after testing.
+# 	"""
+# 	subprocess.run(
+# 		["passwd", "-l", "nobody"],
+# 		capture_output=True,
+# 		text=True,
+# 		check=False
+# 	)
+
+
 def create_temp_user(username, password):
 	"""
-	Creates a temporary user and sets its password.
+	Creates a temporary local user for PAM testing.
+	The user gets a real shell (/bin/bash) and a known password so that
+	pam_faillock will track failures correctly (no nologin/PAM account rejection).
 	Returns True on success, False otherwise.
 	"""
-	create_result = subprocess.run(
+	result = subprocess.run(
 		["useradd", "-m", "-s", "/bin/bash", username],
 		capture_output=True,
 		text=True,
 		check=False
 	)
-	if create_result.returncode != 0:
-		print(f"Warning: useradd failed for {username}: {create_result.stderr.strip()}")
-	passwd_result = subprocess.run(
+	if result.returncode != 0:
+		print(f"Warning: Could not create temp user '{username}': {result.stderr.strip()}")
+		return False
+	chpasswd_result = subprocess.run(
 		["chpasswd"],
 		input=f"{username}:{password}",
 		capture_output=True,
 		text=True,
 		check=False
 	)
-	if passwd_result.returncode != 0:
-		print(f"Warning: Could not set password for test user {username}: {passwd_result.stderr.strip()}")
+	if chpasswd_result.returncode != 0:
+		print(f"Warning: Could not set password for '{username}': {chpasswd_result.stderr.strip()}")
+		subprocess.run(["userdel", "-r", username], capture_output=True, check=False)
 		return False
 	return True
 
 
 def cleanup_temp_user(username):
 	"""
-	Deletes a temporary user and its home directory.
+	Removes a temporary user created for PAM testing, including home directory.
 	"""
 	subprocess.run(
 		["userdel", "-r", username],
@@ -219,19 +248,32 @@ def test_max_login_tries_with_pamtester(expected_value):
 		debug_log(f"Auth modules for {service}: {auth_modules}")
 		return None
 
-	temp_user = f"csel_pamtest_{int(time.time())}"
 	test_password = generate_pamtest_password()
-	debug_log(f"Temporary user: {temp_user}")
 
-	if not create_temp_user(temp_user, test_password):
-		debug_log("Failed to create/set password for temporary user")
-		cleanup_temp_user(temp_user)
+	# Create a temporary user with a real shell (/bin/bash) so that:
+	#   1. The PAM account stack does not reject auth (no nologin shell).
+	#   2. pam_faillock records failures under a non-root UID via runuser.
+	test_user = f"csel_pt_{int(time.time())}"
+	debug_log(f"Creating temp user: {test_user}")
+	if not create_temp_user(test_user, test_password):
+		debug_log(f"Failed to create temp user '{test_user}'")
 		return None
+
+	# --- nobody approach (commented out) ---
+	# # Use the existing nobody user as the test target.
+	# # nobody is a standard system user (UID 65534) present on all Linux systems.
+	# # Pamtester is run via 'su nobody' so the process UID is 65534, not 0,
+	# # which means pam_faillock will record failures normally without root bypass.
+	# test_user = "nobody"
+	# debug_log(f"Test user: {test_user} (existing system user)")
+	# if not set_nobody_password(test_password):
+	# 	debug_log("Failed to set password for nobody")
+	# 	return None
 
 	try:
 		if shutil.which("faillock"):
 			subprocess.run(
-				["faillock", "--reset", "--user", temp_user],
+				["faillock", "--reset", "--user", test_user],
 				capture_output=True,
 				text=True,
 				check=False
@@ -242,23 +284,43 @@ def test_max_login_tries_with_pamtester(expected_value):
 
 		wrong_password = "WrongP@ssword!123"
 
-		# Sanity check 1: correct password must succeed before we start
-		rc, out, err = pamtester_authenticate(service, temp_user, test_password, run_as_user=temp_user)
-		debug_log(f"Sanity check (correct password) rc={rc} out='{out.strip()}' err='{err.strip()}'")
-		if rc != 0:
-			print(f"Warning: Correct password failed pre-check on service '{service}'; cannot test lockout.")
+		# Diagnostic: test correct password as root first to confirm PAM stack works at all
+		rc_root, out_root, err_root = pamtester_authenticate(service, test_user, test_password, run_as_user=None)
+		debug_log(f"Diagnostic (correct password as root) rc={rc_root} out='{out_root.strip()}' err='{err_root.strip()}'")
+		if rc_root != 0:
+			print(f"Warning: PAM service '{service}' rejects correct password even as root; PAM stack may be misconfigured.")
+			debug_log("Check /etc/pam.d/common-auth — pam_faillock authfail must come AFTER pam_unix, not before.")
 			return None
+
+		# Reset faillock so root diagnostic attempt doesn't count
+		if shutil.which("faillock"):
+			subprocess.run(
+				["faillock", "--reset", "--user", test_user],
+				capture_output=True, text=True, check=False
+			)
+			debug_log("faillock reset after root diagnostic")
+
+		# Sanity check 1: correct password must succeed as temp user (via runuser)
+		rc, out, err = pamtester_authenticate(service, test_user, test_password, run_as_user=test_user)
+		debug_log(f"Sanity check (correct password as temp user via runuser) rc={rc} out='{out.strip()}' err='{err.strip()}'")
+		if rc != 0:
+			# runuser failed — fall back to root-invoked pamtester.
+			# Note: root-invoked pamtester bypasses pam_faillock unless even_deny_root is set.
+			debug_log("runuser approach failed; falling back to root-invoked pamtester.")
+			run_as = None
+		else:
+			run_as = test_user
 
 		# Reset faillock after the successful sanity check
 		if shutil.which("faillock"):
 			subprocess.run(
-				["faillock", "--reset", "--user", temp_user],
+				["faillock", "--reset", "--user", test_user],
 				capture_output=True, text=True, check=False
 			)
 			debug_log("faillock reset after correct-password sanity check")
 
 		# Sanity check 2: wrong password must fail
-		rc, out, err = pamtester_authenticate(service, temp_user, wrong_password, run_as_user=temp_user)
+		rc, out, err = pamtester_authenticate(service, test_user, wrong_password, run_as_user=run_as)
 		debug_log(f"Sanity check (wrong password) rc={rc} out='{out.strip()}' err='{err.strip()}'")
 		if rc == 0:
 			print(f"Warning: PAM service '{service}' authenticates wrong passwords; cannot test lockout.")
@@ -267,29 +329,44 @@ def test_max_login_tries_with_pamtester(expected_value):
 		# Reset again so the sanity-check failure doesn't count toward the threshold
 		if shutil.which("faillock"):
 			subprocess.run(
-				["faillock", "--reset", "--user", temp_user],
+				["faillock", "--reset", "--user", test_user],
 				capture_output=True, text=True, check=False
 			)
 			debug_log("faillock reset after wrong-password sanity check")
 
-		# Accumulate exactly expected_value - 1 failures, verify not locked early
+		# Accumulate exactly expected_value - 1 failures, then verify not locked early
+		# by attempting the correct password — it should still succeed.
+		# A successful auth also resets the faillock counter, so we re-run the
+		# expected_value - 1 failures again before the final threshold attempt.
 		if expected_value > 1:
 			for attempt in range(1, expected_value):
-				rc, out, err = pamtester_authenticate(service, temp_user, wrong_password, run_as_user=temp_user)
-				debug_log(f"Attempt {attempt}/{expected_value - 1} rc={rc} out='{out.strip()}' err='{err.strip()}'")
+				rc, out, err = pamtester_authenticate(service, test_user, wrong_password, run_as_user=run_as)
+				debug_log(f"Pre-check attempt {attempt}/{expected_value - 1} rc={rc} out='{out.strip()}' err='{err.strip()}'")
 
-			faillock_info = get_faillock_info(temp_user) if shutil.which("faillock") else {}
-			debug_log(f"faillock info after {expected_value - 1} failures: {faillock_info}")
-			if faillock_info.get("locked"):
+			rc, out, err = pamtester_authenticate(service, test_user, test_password, run_as_user=run_as)
+			debug_log(f"Early-lockout check (correct password after {expected_value - 1} failures) rc={rc} out='{out.strip()}' err='{err.strip()}'")
+			if rc != 0:
 				debug_log("Account locked earlier than expected; deny is set too low")
 				return False
+			# Correct password succeeded (and reset the faillock counter).
+			# Re-accumulate expected_value - 1 failures to set up for the threshold.
+			if shutil.which("faillock"):
+				subprocess.run(
+					["faillock", "--reset", "--user", test_user],
+					capture_output=True, text=True, check=False
+				)
+				debug_log("faillock reset before re-accumulation")
+
+			for attempt in range(1, expected_value):
+				rc, out, err = pamtester_authenticate(service, test_user, wrong_password, run_as_user=run_as)
+				debug_log(f"Re-accumulate attempt {attempt}/{expected_value - 1} rc={rc} out='{out.strip()}' err='{err.strip()}'")
 
 		# Final failure to reach the lockout threshold
-		rc, out, err = pamtester_authenticate(service, temp_user, wrong_password, run_as_user=temp_user)
+		rc, out, err = pamtester_authenticate(service, test_user, wrong_password, run_as_user=run_as)
 		debug_log(f"Final failure rc={rc} out='{out.strip()}' err='{err.strip()}'")
 
 		# Correct password should now be rejected if lockout is enforced
-		rc, out, err = pamtester_authenticate(service, temp_user, test_password, run_as_user=temp_user)
+		rc, out, err = pamtester_authenticate(service, test_user, test_password, run_as_user=run_as)
 		debug_log(f"Correct password attempt after threshold rc={rc} out='{out.strip()}' err='{err.strip()}'")
 		if rc != 0:
 			debug_log("Correct password rejected after threshold; lockout confirmed")
@@ -299,13 +376,16 @@ def test_max_login_tries_with_pamtester(expected_value):
 		debug_log("Correct password succeeded after threshold; lockout NOT enforced")
 		return False
 	finally:
+		# Always reset faillock for the test user and remove the temp account
 		if shutil.which("faillock"):
 			subprocess.run(
-				["faillock", "--reset", "--user", temp_user],
+				["faillock", "--reset", "--user", test_user],
 				capture_output=True,
 				text=True,
 				check=False
 			)
 			debug_log("faillock reset executed (cleanup)")
-		cleanup_temp_user(temp_user)
-		debug_log("Temporary user cleaned up")
+		cleanup_temp_user(test_user)
+		debug_log(f"Temp user '{test_user}' removed (cleanup)")
+		# lock_nobody_account()  # nobody approach: re-lock nobody account
+		# debug_log("nobody account re-locked (cleanup)")
