@@ -59,3 +59,11 @@ Added the scoring engine as a service. Fixed vulnerability issues. Streamlined i
 - Unable to test update program without figuring out how to cache an update
 
 #### Update By @joshkimchifriedrice
+
+# 3.1.0(2026-2-26) Vulnerability fixes
+# Release Summary
+Fixed vulnerability issues.
+
+## Changes
+- Overhauled logic for **check startup** vulnerability and tested.
+- Fixed string matching for the **check hosts** vulnerability for a default file.
