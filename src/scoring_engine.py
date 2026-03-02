@@ -717,7 +717,7 @@ def check_ufw_rule(port, protocol):
         return "ALLOW"
 
 
-def portVulns(vulnerability, name):
+def portVulnsOld(vulnerability, name):
     """
     Checks for open or closed ports based on the provided vulnerabilities.
     Handles both TCP and UDP protocols, and supports IPv4/IPv6 addresses.
@@ -822,6 +822,213 @@ def portVulns(vulnerability, name):
                 )
             else:
                 record_miss("Firewall Management")
+
+def portVulns(vulnerability, name):
+    """
+    Checks open/closed port rules based solely on UFW policy.
+
+    For "Check Port Open":
+        HIT  — an explicit ALLOW rule exists for the port that covers the
+               required protocol (a protocol-less rule e.g. "ALLOW 22" covers
+               both TCP and UDP) and whose From is "Anywhere" or the configured IP.
+        MISS — no such ALLOW rule exists.
+
+    For "Check Port Closed":
+        HIT  — no ALLOW rule exists for BOTH the IPv4 and IPv6 rule entries
+               (UFW default-deny covers each, or an explicit DENY/REJECT exists).
+               UFW inactive → MISS (no default-deny in effect).
+        MISS — an ALLOW rule exists for the port on either IPv4 or IPv6.
+
+    IP filtering (only when a specific IP is configured):
+        A rule is considered only if its From field is "Anywhere"
+        (rule applies to all sources) or exactly the configured IP.
+        Empty IP / "0.0.0.0" / "::" → no IP filtering.
+
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+        name (str): "Check Port Open" or "Check Port Closed"
+    """
+    expect_open = (name == "Check Port Open")
+
+    # Fetch and parse UFW rules once for all vulns in this call
+    try:
+        result = subprocess.run(
+            ["ufw", "status", "verbose"],
+            capture_output=True, text=True, check=True
+        )
+        ufw_output = result.stdout
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Could not get UFW status: {e}")
+        for vuln in vulnerability:
+            if vuln != 1:
+                record_miss("Firewall Management")
+        return
+    except Exception as e:
+        print(f"Warning: Unexpected error getting UFW status: {e}")
+        for vuln in vulnerability:
+            if vuln != 1:
+                record_miss("Firewall Management")
+        return
+
+    ufw_active = "status: active" in ufw_output.lower()
+
+    # Parse every rule line into structured dicts.
+    # ufw status verbose columns (separated by 2+ spaces):
+    #   To                  Action      From
+    #   22/tcp              ALLOW IN    Anywhere
+    #   53                  ALLOW IN    Anywhere
+    #   443/tcp             DENY IN     10.0.0.5
+    #   22/tcp (v6)         ALLOW IN    Anywhere (v6)
+    parsed_rules = []
+    in_rules_section = False
+    for line in ufw_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Detect the header row
+        if (stripped.lower().startswith("to")
+                and "action" in stripped.lower()
+                and "from" in stripped.lower()):
+            in_rules_section = True
+            continue
+        if stripped.startswith("--"):
+            continue
+        if not in_rules_section:
+            continue
+
+        # Split into columns on runs of 2+ spaces
+        cols = re.split(r' {2,}', stripped)
+        if len(cols) < 3:
+            continue
+
+        to_raw     = cols[0].strip()
+        action_raw = cols[1].strip().lower()
+        from_raw   = cols[2].strip().lower()
+
+        # Detect IPv6 rule BEFORE stripping the annotation
+        is_v6 = bool(re.search(r'\(v6\)', to_raw, re.IGNORECASE))
+
+        # Strip IPv6 "(v6)" annotations for port/proto parsing
+        to_raw   = re.sub(r'\s*\(v6\)\s*$', '', to_raw,   flags=re.IGNORECASE).strip()
+        from_raw = re.sub(r'\s*\(v6\)\s*$', '', from_raw, flags=re.IGNORECASE).strip()
+
+        # Determine action (ALLOW IN / DENY IN / REJECT IN …)
+        if "allow" in action_raw:
+            action = "allow"
+        elif "deny" in action_raw or "reject" in action_raw:
+            action = "deny"
+        else:
+            continue  # LIMIT and other actions are not scored
+
+        # Parse To field: "22/tcp", "53/udp", "80", "Anywhere" …
+        # Only port-targeted rules are relevant here.
+        port_match = re.match(r'^(\d+)(?:/(tcp|udp))?$', to_raw, re.IGNORECASE)
+        if not port_match:
+            continue  # Not a port rule (e.g. "Anywhere", service name, etc.)
+
+        rule_port  = int(port_match.group(1))
+        # proto "any" means the rule has no protocol qualifier → covers both tcp and udp
+        rule_proto = (port_match.group(2) or "any").lower()
+
+        parsed_rules.append({
+            'port':   rule_port,
+            'proto':  rule_proto,   # "tcp" | "udp" | "any"
+            'action': action,       # "allow" | "deny"
+            'from':   from_raw,     # already lowercased
+            'is_v6':  is_v6,        # True if rule applies to IPv6
+        })
+
+    # Score each configured vulnerability
+    for vuln in vulnerability:
+        if vuln != 1:
+            protocol     = vulnerability[vuln].get("Protocol", "TCP").strip().lower()
+            port_str     = vulnerability[vuln].get("Port", "")
+            config_ip    = vulnerability[vuln].get("IP", "").strip().lower()
+            program_name = vulnerability[vuln].get("Program Name", "")
+
+            if not port_str:
+                print(f"Warning: Missing port for {name}")
+                record_miss("Firewall Management")
+                continue
+
+            try:
+                port = int(port_str)
+            except (ValueError, TypeError):
+                print(f"Warning: Invalid port '{port_str}' for {name}")
+                record_miss("Firewall Management")
+                continue
+
+            # IP filtering: disabled for empty / wildcard addresses
+            ip_filter = config_ip not in ("", " ", "0.0.0.0", "::", "anywhere")
+
+            def proto_matches(rule):
+                """Rule covers the requested protocol when its proto is 'any' or an exact match."""
+                return rule['proto'] == 'any' or rule['proto'] == protocol
+
+            def from_matches(rule):
+                """Rule's From satisfies IP requirement."""
+                if not ip_filter:
+                    return True  # No IP filter — any From is acceptable
+                # "anywhere" in the rule means all sources are covered
+                return rule['from'] in ("anywhere", config_ip)
+
+            has_v4_allow = any(
+                r['port'] == port and r['action'] == 'allow' and not r['is_v6']
+                and proto_matches(r) and from_matches(r)
+                for r in parsed_rules
+            )
+            has_v6_allow = any(
+                r['port'] == port and r['action'] == 'allow' and r['is_v6']
+                and proto_matches(r) and from_matches(r)
+                for r in parsed_rules
+            )
+            has_allow = has_v4_allow or has_v6_allow
+            has_v4_deny = any(
+                r['port'] == port and r['action'] == 'deny' and not r['is_v6']
+                and proto_matches(r) and from_matches(r)
+                for r in parsed_rules
+            )
+            has_v6_deny = any(
+                r['port'] == port and r['action'] == 'deny' and r['is_v6']
+                and proto_matches(r) and from_matches(r)
+                for r in parsed_rules
+            )
+
+            display_name = program_name if program_name else f"Port {port}"
+            proto_label  = protocol.upper()
+
+            if expect_open:
+                # Port Open: need an explicit ALLOW rule
+                if has_allow:
+                    record_hit(
+                        f"{display_name} ({proto_label}/{port}) is allowed by UFW",
+                        vulnerability[vuln]["Points"],
+                    )
+                else:
+                    record_miss("Firewall Management")
+
+            else:
+                # Port Closed: BOTH v4 and v6 must have no ALLOW rule
+                if not ufw_active:
+                    # UFW inactive — default deny is not in effect, can't confirm closed
+                    record_miss("Firewall Management")
+                elif has_v4_allow or has_v6_allow:
+                    # At least one side (v4 or v6) still has an ALLOW rule
+                    record_miss("Firewall Management")
+                else:
+                    # Neither v4 nor v6 has an ALLOW rule — port is closed on both sides
+                    if has_v4_deny and has_v6_deny:
+                        reason = "explicitly denied by UFW (IPv4 and IPv6)"
+                    elif has_v4_deny:
+                        reason = "explicitly denied by UFW (IPv4, IPv6 default deny)"
+                    elif has_v6_deny:
+                        reason = "explicitly denied by UFW (IPv6, IPv4 default deny)"
+                    else:
+                        reason = "not allowed (UFW default deny)"
+                    record_hit(
+                        f"{display_name} ({proto_label}/{port}) is closed — {reason}",
+                        vulnerability[vuln]["Points"],
+                    )
 
 
 def audit_check():
