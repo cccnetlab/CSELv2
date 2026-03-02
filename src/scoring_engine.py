@@ -24,6 +24,7 @@ import warnings
 import json
 from inotify_simple import INotify, flags
 from pathlib import Path
+import xdg.BaseDirectory as xdg_base
 
 # Add parent directory to path for relative imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1832,83 +1833,164 @@ def remove_text_from_file(vulnerability):
                 continue
 
 
+def _is_valid_autostart_file(path):
+    """
+    Validate a .desktop file for autostart purposes.
+
+    A file is considered valid if it has:
+    - A [Desktop Entry] section
+    - Name, Exec, and Type keys (case-sensitive key names)
+    - Type=Application (whitespace-insensitive, case-insensitive)
+    - A resolvable Exec binary (first token after stripping field codes like %f/%u)
+
+    Args:
+        path (Path or str): Path to the .desktop file.
+
+    Returns:
+        tuple: (is_valid: bool, is_hidden: bool)
+            is_valid  - True if the file meets all validity criteria.
+            is_hidden - True if Hidden=true (whitespace-insensitive, lowercase 'true').
+    """
+    try:
+        parser = configparser.RawConfigParser()
+        parser.optionxform = str  # Preserve key case (e.g. "Exec" not "exec")
+        parser.read(str(path))
+
+        if not parser.has_section('Desktop Entry'):
+            return False, False
+
+        section = parser['Desktop Entry']
+
+        # Check required keys exist (case-sensitive)
+        for key in ('Name', 'Exec', 'Type'):
+            if key not in section:
+                return False, False
+
+        # Type must be "Application" (whitespace-insensitive, case-insensitive)
+        if section['Type'].strip().lower() != 'application':
+            return False, False
+
+        # Exec: extract first token, strip XDG field codes (%f, %F, %u, %U, etc.)
+        exec_value = section['Exec'].strip()
+        exec_cmd = re.split(r'\s+', exec_value)[0]
+        exec_cmd = re.sub(r'%[a-zA-Z]', '', exec_cmd).strip()
+        if not exec_cmd:
+            return False, False
+        # Must be an existing absolute path or findable in PATH
+        if not (os.path.isfile(exec_cmd) or shutil.which(exec_cmd) is not None):
+            return False, False
+
+        # Hidden=true check (whitespace-insensitive, must be lowercase 'true')
+        is_hidden = False
+        if 'Hidden' in section:
+            is_hidden = section['Hidden'].strip() == 'true'
+
+        return True, is_hidden
+
+    except (configparser.Error, IOError, PermissionError, OSError):
+        return False, False
+
+
 def start_up_apps(vulnerability):
     """
     Checks if specific applications are disabled from running at startup.
-    
-    Logic:
-    - If app exists in /etc/xdg/autostart/ (global):
-      * Hit: Corresponding .desktop file exists in ~/.config/autostart/ with Hidden=true
-      * Miss: Otherwise
-    - If app doesn't exist in global directory:
-      * Hit: .desktop file exists in ~/.config/autostart/ with Hidden=true
-      * Miss: File doesn't exist, or Hidden=false, or no Hidden line
-    
+
+    Determines user home directory properly when running under sudo by checking
+    the SUDO_USER environment variable to get the actual user (not root).
+    Falls back to Path.home() if not running under sudo.
+
+    Uses XDG base directories (via pyxdg) to find system-wide autostart folders.
+
+    Validation criteria for a .desktop file:
+    - Has a [Desktop Entry] section
+    - Has Name, Exec, and Type keys
+    - Type=Application (whitespace/case-insensitive)
+    - Exec binary is resolvable (exists on filesystem or in PATH)
+
+    Scoring logic (checked in order):
+    1. User autostart file (~/.config/autostart/<program>.desktop):
+       - If valid: hit if Hidden=true (whitespace-insensitive), miss otherwise
+    2. Global autostart file(s) (from XDG config dirs, e.g. /etc/xdg/autostart):
+       - If valid: hit if Hidden=true (whitespace-insensitive), miss otherwise
+    3. Neither file is valid (doesn't exist or fails validation):
+       - Record a hit (program is not configured to autostart anywhere)
+
+    Note: Hidden value matching is whitespace-insensitive and case-sensitive
+          (must be lowercase 'true'). Hidden=TRUE will NOT score a hit.
+
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
-    global_autostart_dir = Path("/etc/xdg/autostart")
-    
+    # Get system-wide autostart directories via XDG (excludes user config home)
+    global_autostart_dirs = [
+        Path(d) / "autostart"
+        for d in xdg_base.xdg_config_dirs
+        if d != xdg_base.xdg_config_home
+    ]
+
     # Get the actual user's home directory (not root's when running with sudo)
     sudo_user = os.environ.get('SUDO_USER')
     if sudo_user:
         user_home = Path(f"/home/{sudo_user}")
     else:
         user_home = Path.home()
-    
+
     user_autostart_dir = user_home / ".config/autostart"
-    
+
     for vuln in vulnerability:
         if vuln != 1:
             program_to_check = vulnerability[vuln].get("Program Name", "")
             if not program_to_check:
                 continue
-            
+
             # Ensure .desktop extension
-            desktop_filename = program_to_check if program_to_check.endswith(".desktop") else f"{program_to_check}.desktop"
-            
-            global_desktop_path = global_autostart_dir / desktop_filename
+            desktop_filename = (
+                program_to_check
+                if program_to_check.endswith(".desktop")
+                else f"{program_to_check}.desktop"
+            )
+
             user_desktop_path = user_autostart_dir / desktop_filename
-            is_disabled = False
-            
-            # Check if app exists in global directory
-            if global_desktop_path.exists():
-                # App exists globally - must have Hidden=true in user config
-                if user_desktop_path.exists():
-                    # Read file directly to enforce exact format: "[Desktop Entry]" and "Hidden=true"
-                    # No spaces, exact capitalization required
-                    try:
-                        with open(user_desktop_path, 'r') as f:
-                            content = f.read()
-                            # Check for exact strings "[Desktop Entry]" and "Hidden=true"
-                            is_disabled = "[Desktop Entry]" in content and "Hidden=true" in content
-                    except (IOError, PermissionError):
-                        is_disabled = False
+
+            # Step 1: Check user autostart file — if valid, score on Hidden
+            if user_desktop_path.exists():
+                is_valid, is_hidden = _is_valid_autostart_file(user_desktop_path)
+                if is_valid:
+                    if is_hidden:
+                        record_hit(
+                            f"{program_to_check} has been disabled from startup",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("File Management")
+                    continue
+
+            # Step 2: Check global autostart file(s) — if valid, score on Hidden
+            global_valid = False
+            global_hidden = False
+            for global_autostart_dir in global_autostart_dirs:
+                global_desktop_path = global_autostart_dir / desktop_filename
+                if global_desktop_path.exists():
+                    gv, gh = _is_valid_autostart_file(global_desktop_path)
+                    if gv:
+                        global_valid, global_hidden = True, gh
+                        break
+
+            if global_valid:
+                if global_hidden:
+                    record_hit(
+                        f"{program_to_check} has been disabled from startup",
+                        vulnerability[vuln]["Points"],
+                    )
                 else:
-                    is_disabled = False
-            else:
-                # App doesn't exist in global directory - check user directory
-                if user_desktop_path.exists():
-                    # Read file directly to enforce exact format: "[Desktop Entry]" and "Hidden=true"
-                    # No spaces, exact capitalization required
-                    try:
-                        with open(user_desktop_path, 'r') as f:
-                            content = f.read()
-                            # Check for exact strings "[Desktop Entry]" and "Hidden=true"
-                            is_disabled = "[Desktop Entry]" in content and "Hidden=true" in content
-                    except (IOError, PermissionError):
-                        is_disabled = False
-                else:
-                    is_disabled = False
-            
-            # Record hit or miss
-            if is_disabled:
-                record_hit(
-                    f"{program_to_check} has been disabled from startup",
-                    vulnerability[vuln]["Points"],
-                )
-            else:
-                record_miss("File Management")
+                    record_miss("File Management")
+                continue
+
+            # Step 3: No valid autostart entry found — program is not configured to autostart
+            record_hit(
+                f"{program_to_check} is not configured to autostart",
+                vulnerability[vuln]["Points"],
+            )
 
 
 def check_hosts(vulnerability):
