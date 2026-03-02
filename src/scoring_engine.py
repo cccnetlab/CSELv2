@@ -2186,13 +2186,13 @@ def check_hosts(vulnerability):
     # These are the default entries in a typical Linux mint hosts file
     # TODO: Might need updating for other distributions
     default_patterns = [
-        r'^\s*127\.0\.0\.1\s+(localhost|localhost\.localdomain|localhost4|localhost4\.localdomain4)(\s+\S+)*\s*$',
-        r'^\s*127\.0\.1\.1\s+\S+\s*$',
-        r'^\s*::1\s+(localhost|ip6-localhost|ip6-loopback|localhost\.localdomain|localhost6|localhost6\.localdomain6)(\s+(localhost|ip6-localhost|ip6-loopback|localhost\.localdomain|localhost6|localhost6\.localdomain6))*\s*$',
-        r'^\s*fe00::0\s+ip6-localnet\s*$',
-        r'^\s*ff00::0\s+ip6-mcastprefix\s*$',
-        r'^\s*ff02::1\s+ip6-allnodes\s*$',
-        r'^\s*ff02::2\s+ip6-allrouters\s*$',
+        r'^\s*127\.0\.0\.1\s+\S+(\s+\S+)*\s*$',
+        r'^\s*127\.0\.1\.1\s+\S+(\s+\S+)*\s*$',
+        r'^\s*::1\s+\S+(\s+\S+)*\s*$',
+        r'^\s*fe00::0\s+\S+(\s+\S+)*\s*$',
+        r'^\s*ff00::0\s+\S+(\s+\S+)*\s*$',
+        r'^\s*ff02::1\s+\S+(\s+\S+)*\s*$',
+        r'^\s*ff02::2\s+\S+(\s+\S+)*\s*$',
     ]
     try:
         with open(hosts_file_path, "r") as file:
