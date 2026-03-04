@@ -853,7 +853,7 @@ def portVulns(vulnerability, name):
     # Fetch and parse UFW rules once for all vulns in this call
     try:
         result = subprocess.run(
-            ["ufw", "status", "verbose"],
+            ["sudo", "ufw", "status", "numbered"],
             capture_output=True, text=True, check=True
         )
         ufw_output = result.stdout
@@ -873,12 +873,11 @@ def portVulns(vulnerability, name):
     ufw_active = "status: active" in ufw_output.lower()
 
     # Parse every rule line into structured dicts.
-    # ufw status verbose columns (separated by 2+ spaces):
-    #   To                  Action      From
-    #   22/tcp              ALLOW IN    Anywhere
-    #   53                  ALLOW IN    Anywhere
-    #   443/tcp             DENY IN     10.0.0.5
-    #   22/tcp (v6)         ALLOW IN    Anywhere (v6)
+    # ufw status numbered output format (lower number = higher priority):
+    #   [ 1] 22/tcp              ALLOW IN    Anywhere
+    #   [ 2] 53                  ALLOW IN    Anywhere
+    #   [ 3] 443/tcp             DENY IN     10.0.0.5
+    #   [ 4] 22/tcp (v6)         ALLOW IN    Anywhere (v6)
     parsed_rules = []
     in_rules_section = False
     for line in ufw_output.splitlines():
@@ -896,8 +895,15 @@ def portVulns(vulnerability, name):
         if not in_rules_section:
             continue
 
+        # Extract rule number and body from lines like "[ 1] 22/tcp  ALLOW IN  Anywhere"
+        num_match = re.match(r'^\[\s*(\d+)\]\s*(.*)', stripped)
+        if not num_match:
+            continue
+        rule_number = int(num_match.group(1))
+        rule_body   = num_match.group(2)
+
         # Split into columns on runs of 2+ spaces
-        cols = re.split(r' {2,}', stripped)
+        cols = re.split(r' {2,}', rule_body)
         if len(cols) < 3:
             continue
 
@@ -961,38 +967,44 @@ def portVulns(vulnerability, name):
             # IP filtering: disabled for empty / wildcard addresses
             ip_filter = config_ip not in ("", " ", "0.0.0.0", "::", "anywhere")
 
-            def proto_matches(rule):
-                """Rule covers the requested protocol when its proto is 'any' or an exact match."""
-                return rule['proto'] == 'any' or rule['proto'] == protocol
+            def first_applicable_rule(is_v6_target):
+                """
+                Return the first (lowest-numbered) UFW rule that matches
+                port + protocol + IP requirements for the given IP version.
+                Rules are already stored in priority order from ufw status numbered output.
+                """
+                for r in parsed_rules:  # already in priority order — no sort needed
+                    print("DEBUG: Evaluating rule:", r)
+                    print(f"DEBUG: Configuration - port={port}, protocol={protocol}, ip_filter={ip_filter}, config_ip={config_ip}, is_v6_target={is_v6_target}")
+                    if r['port'] != port:
+                        continue
+                    if r['is_v6'] != is_v6_target:
+                        continue
+                    # Protocol: rule proto 'any' covers both tcp and udp
+                    if r['proto'] != 'any' and r['proto'] != protocol:
+                        continue
+                    # From: must satisfy IP requirement
+                    if ip_filter:
+                        # Specific IP configured — accept rules targeting that IP or Anywhere
+                        if r['from'] not in ('anywhere', config_ip):
+                            continue
+                    else:
+                        # No IP configured — only "Anywhere" rules apply
+                        if r['from'] != 'anywhere':
+                            continue
+                    return r
+                return None
 
-            def from_matches(rule):
-                """Rule's From satisfies IP requirement."""
-                if not ip_filter:
-                    return True  # No IP filter — any From is acceptable
-                # "anywhere" in the rule means all sources are covered
-                return rule['from'] in ("anywhere", config_ip)
+            first_v4 = first_applicable_rule(False)
+            # Only check v6 when no specific IP is configured; a specific IP is
+            # always an IPv4 address so its UFW rule will never appear as a v6 rule.
+            first_v6 = None if ip_filter else first_applicable_rule(True)
 
-            has_v4_allow = any(
-                r['port'] == port and r['action'] == 'allow' and not r['is_v6']
-                and proto_matches(r) and from_matches(r)
-                for r in parsed_rules
-            )
-            has_v6_allow = any(
-                r['port'] == port and r['action'] == 'allow' and r['is_v6']
-                and proto_matches(r) and from_matches(r)
-                for r in parsed_rules
-            )
-            has_allow = has_v4_allow or has_v6_allow
-            has_v4_deny = any(
-                r['port'] == port and r['action'] == 'deny' and not r['is_v6']
-                and proto_matches(r) and from_matches(r)
-                for r in parsed_rules
-            )
-            has_v6_deny = any(
-                r['port'] == port and r['action'] == 'deny' and r['is_v6']
-                and proto_matches(r) and from_matches(r)
-                for r in parsed_rules
-            )
+            has_v4_allow = first_v4 is not None and first_v4['action'] == 'allow'
+            has_v6_allow = first_v6 is not None and first_v6['action'] == 'allow'
+            has_allow    = has_v4_allow or has_v6_allow
+            has_v4_deny  = first_v4 is not None and first_v4['action'] == 'deny'
+            has_v6_deny  = first_v6 is not None and first_v6['action'] == 'deny'
 
             display_name = program_name if program_name else f"Port {port}"
             proto_label  = protocol.upper()
@@ -1008,23 +1020,28 @@ def portVulns(vulnerability, name):
                     record_miss("Firewall Management")
 
             else:
-                # Port Closed: BOTH v4 and v6 must have no ALLOW rule
+                # Port Closed: all applicable sides must have no ALLOW rule.
+                # When an IP is specified only v4 is checked; otherwise both v4 and v6.
                 if not ufw_active:
                     # UFW inactive — default deny is not in effect, can't confirm closed
                     record_miss("Firewall Management")
                 elif has_v4_allow or has_v6_allow:
-                    # At least one side (v4 or v6) still has an ALLOW rule
+                    # At least one checked side still has an ALLOW rule
                     record_miss("Firewall Management")
                 else:
-                    # Neither v4 nor v6 has an ALLOW rule — port is closed on both sides
-                    if has_v4_deny and has_v6_deny:
-                        reason = "explicitly denied by UFW (IPv4 and IPv6)"
-                    elif has_v4_deny:
-                        reason = "explicitly denied by UFW (IPv4, IPv6 default deny)"
-                    elif has_v6_deny:
-                        reason = "explicitly denied by UFW (IPv6, IPv4 default deny)"
+                    if ip_filter:
+                        # IP-specific check: only v4 matters
+                        reason = "explicitly denied by UFW (IPv4)" if has_v4_deny else "not allowed (UFW default deny)"
                     else:
-                        reason = "not allowed (UFW default deny)"
+                        # No IP: both v4 and v6 checked
+                        if has_v4_deny and has_v6_deny:
+                            reason = "explicitly denied by UFW (IPv4 and IPv6)"
+                        elif has_v4_deny:
+                            reason = "explicitly denied by UFW (IPv4, IPv6 default deny)"
+                        elif has_v6_deny:
+                            reason = "explicitly denied by UFW (IPv6, IPv4 default deny)"
+                        else:
+                            reason = "not allowed (UFW default deny)"
                     record_hit(
                         f"{display_name} ({proto_label}/{port}) is closed — {reason}",
                         vulnerability[vuln]["Points"],
