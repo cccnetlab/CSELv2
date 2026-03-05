@@ -10,7 +10,7 @@ VENV_DIR="${SCRIPT_DIR}/.venv"
 REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
 
 # System packages to install (ADD MORE AS NEEDED)
-PKGS=(python3-tk libpwquality-tools pamtester python3-venv python3-pip libpam-pwquality)
+PKGS=(python3-tk libpwquality-tools pamtester python3-venv python3-pip libpam-pwquality auditd openssh-server)
 LSB_PKG=lsb-release
 
 echo "=========================================="
