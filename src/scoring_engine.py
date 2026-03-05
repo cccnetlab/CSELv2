@@ -32,6 +32,40 @@ from src import admin_test
 from src import db_handler
 from src import pamtester
 
+def ostype() -> str:
+    """
+    Detect whether the current OS is Ubuntu or Linux Mint.
+    Returns 'ubuntu', 'linuxmint', or the raw ID string if neither is matched.
+    Raises EnvironmentError if the OS cannot be determined.
+    """
+    os_release = "/etc/os-release"
+    if os.path.isfile(os_release):
+        with open(os_release) as f:
+            info = {}
+            for line in f:
+                line = line.strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    info[k] = v.strip('"').strip("'")
+        detected = info.get("ID", "").lower()
+    else:
+        result = subprocess.run(
+            ["lsb_release", "-si"],
+            capture_output=True, text=True
+        )
+        detected = result.stdout.strip().lower()
+
+    if detected in ("ubuntu", "linuxmint"):
+        return detected
+    elif detected:
+        print(f"Warning: Unrecognized OS type '{detected}', proceeding with caution.")
+        return detected
+    else:
+        raise EnvironmentError("Could not determine the OS type.")
+
+# Detect OS immediately on startup — available globally as OSTYPE
+OSTYPE = ostype()
+
 ### DEVELOPER TOOL ###
 """ 
 Set to True to enable developer mode features, 
@@ -75,6 +109,9 @@ _ssh_config_cache_valid: bool = False
 
 # Path for storing password requirement configuration timestamps
 TIMESTAMP_FILE = "/etc/CYBERPATRIOT/password_config_timestamps.json"
+
+# Absolute file:// URI for the logo, resolved from assets/icons/logo.png relative to this repo
+ICONS_URI = "file://" + str(Path(__file__).resolve().parent.parent / "assets" / "icons")
 
 
 def load_config_timestamps():
@@ -129,7 +166,7 @@ def draw_head():
             "\n"
         )
         file.write(
-            '<table align="center" cellpadding="10"><tr><td><img src="file:///var/www/CYBERPATRIOT/CCC_logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="file:///var/www/CYBERPATRIOT/SoCalCCCC.png"></td></tr></table><br><H2>Your Score: #TotalScore#/'
+            '<table align="center" cellpadding="10"><tr><td><img src="' + ICONS_URI + "/logo.png" + '"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="' + ICONS_URI + "/SoCalCCCC.png" + '"></td></tr></table><br><H2>Your Score: #TotalScore#/'
             + str(menuSettings["Tally Points"])
             + "</H2><H2>Vulnerabilities: #TotalVuln#/"
             + str(menuSettings["Tally Vulnerabilities"])
@@ -185,26 +222,39 @@ def record_penalty(name, points):
     total_points -= int(points)
 
 
-def display_html_sh(path):  
+def display_html_sh(path):
     """
-    Creates a .desktop file for the scoring report on the user's desktop.
-    
+    For Ubuntu: copies ScoreReport.html directly to the user's Desktop.
+    For other distros: creates a ScoringReport.desktop launcher on the Desktop.
+
     Args:
-        path (str): The path to the user's desktop directory.
+        path (str): The path to the user's desktop directory (trailing slash).
     """
     # Ensure the Desktop directory exists
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
-    
-    with open(path + "ScoringReport.desktop", "w") as dt_f:
-        dt_f.write(
-            """[Desktop Entry]
+
+    if OSTYPE == "ubuntu":
+        src = "/var/www/CYBERPATRIOT/ScoreReport.html"
+        dst = path + "ScoreReport.html"
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+    else:
+        with open(path + "ScoringReport.desktop", "w") as dt_f:
+            dt_f.write(
+                """[Desktop Entry]
 Name = Scoring Report
 Exec = xdg-open /var/www/CYBERPATRIOT/ScoreReport.html
 Icon = /var/www/CYBERPATRIOT/ScoringEngineLinuxBig.png
 Type = Application
 Categories = Development;HTML;
 Terminal = false"""
+            )
+        actual_user, _ = get_actual_user_info()
+        subprocess.run(
+            ["sudo", "-u", actual_user, "gio", "set",
+             path + "ScoringReport.desktop", "metadata::trusted", "true"],
+            check=False
         )
 
 
@@ -228,14 +278,13 @@ def draw_tail():
     # shutil.copy('/var/www/CYBERPATRIOT/ScoreReport.html', '/home/' + actual_user + '/Desktop/')
     # os.chown('/home/' + actual_user + '/Desktop/ScoreReport.html', actual_uid, actual_uid)
     display_html_sh("/home/" + actual_user + "/Desktop/")
-    os.chown(
-        "/home/" + actual_user + "/Desktop/ScoringReport.desktop",
-        actual_uid,
-        actual_uid,
-    )
-    os.chmod(
-        "/home/" + actual_user + "/Desktop/ScoringReport.desktop", 0o770
-    )
+    if OSTYPE == "ubuntu":
+        desktop_file = "/home/" + actual_user + "/Desktop/ScoreReport.html"
+    else:
+        desktop_file = "/home/" + actual_user + "/Desktop/ScoringReport.desktop"
+    if os.path.exists(desktop_file):
+        os.chown(desktop_file, actual_uid, actual_uid)
+        os.chmod(desktop_file, 0o770)
 
 
 def initialize_score_report():
@@ -263,7 +312,7 @@ def initialize_score_report():
             "\n"
         )
         file.write(
-            '<table align="center" cellpadding="10"><tr><td><img src="file:///var/www/CYBERPATRIOT/CCC_logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="file:///var/www/CYBERPATRIOT/SoCalCCCC.png"></td></tr></table><br><H2>Your Score: 0/'
+            '<table align="center" cellpadding="10"><tr><td><img src="' + LOGO_URI + '"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="' + ICONS_URI + "/SoCalCCCC.png" + '"></td></tr></table><br><H2>Your Score: 0/'
             + str(current_settings["Tally Points"])
             + "</H2><H2>Vulnerabilities: 0/"
             + str(current_settings["Tally Vulnerabilities"])
@@ -281,14 +330,13 @@ def initialize_score_report():
 
     # Ensure desktop icon exists
     display_html_sh("/home/" + actual_user + "/Desktop/")
-    os.chown(
-        "/home/" + actual_user + "/Desktop/ScoringReport.desktop",
-        actual_uid,
-        actual_uid,
-    )
-    os.chmod(
-        "/home/" + actual_user + "/Desktop/ScoringReport.desktop", 0o770
-    )
+    if OSTYPE == "ubuntu":
+        desktop_file = "/home/" + actual_user + "/Desktop/ScoreReport.html"
+    else:
+        desktop_file = "/home/" + actual_user + "/Desktop/ScoringReport.desktop"
+    if os.path.exists(desktop_file):
+        os.chown(desktop_file, actual_uid, actual_uid)
+        os.chmod(desktop_file, 0o770)
 
 
 # Extra Functions
@@ -372,24 +420,39 @@ def check_score():
                 print("Warning: Cannot send notification - user info not available")
                 return
         
-        try:
-            # Set up environment for the user's D-Bus session
-            env = os.environ.copy()
-            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{actual_uid}/bus"
-            env["DISPLAY"] = ":0"
-            env["XDG_RUNTIME_DIR"] = f"/run/user/{actual_uid}"
-            
+        try:            
             # Run notify-send as the actual user
-            subprocess.run(
-                ["sudo", "-u", actual_user, "notify-send", 
-                 "-i", "utilities-terminal", 
-                 "CyberPatriot", 
-                 message],
-                env=env,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+            if(OSTYPE == "ubuntu"):
+                subprocess.run([
+                    "sudo", "-u", actual_user,
+                    "env",
+                    f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{actual_uid}/bus",
+                    f"DISPLAY=:0",
+                    f"XDG_RUNTIME_DIR=/run/user/{actual_uid}",
+                    "notify-send",
+                    "-i", "utilities-terminal",
+                    "CyberPatriot",
+                    message],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                # Set up environment for the user's D-Bus session
+                env = os.environ.copy()
+                env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{actual_uid}/bus"
+                env["DISPLAY"] = ":0"
+                env["XDG_RUNTIME_DIR"] = f"/run/user/{actual_uid}"
+                subprocess.run(
+                    ["sudo", "-u", actual_user, "notify-send", 
+                    "-i", "utilities-terminal", 
+                    "CyberPatriot", 
+                    message],
+                    env=env,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
         except Exception as e:
             print(f"Notification failed: {e}")
     
@@ -2008,53 +2071,49 @@ def user_change_password(vulnerability):
     # Use the global cache built in the main loop
     global password_requirements_cache
     requirements_to_check = password_requirements_cache.copy()
-    
     for vuln in vulnerability:
         if vuln != 1:
             username = vulnerability[vuln]["User Name"]
-            
+
             # Step 1: Detect password hash change and record timestamp
             # Get current hash and compare with stored hash to detect changes
             try:
                 current_hash = get_password_hash(username)
-                
+
                 # Load stored timestamps and hashes
                 config_timestamps = load_config_timestamps()
                 stored_data = config_timestamps.get(username, {})
                 stored_hash = stored_data.get('validated_hash')
                 stored_timestamp = stored_data.get('password_change_timestamp')
-                
+
                 # Check if hash has changed since last check
                 password_change_timestamp = None
                 if stored_hash and current_hash and stored_hash != current_hash:
-                    # Hash changed! Record the current time as password change time
+                    # Hash changed — record current time as password change time
                     password_change_timestamp = datetime.datetime.now()
-                    # Update the stored hash and timestamp
                     stored_data['validated_hash'] = current_hash
                     stored_data['password_change_timestamp'] = password_change_timestamp.strftime("%Y-%m-%d %H:%M:%S")
                     config_timestamps[username] = stored_data
                     save_config_timestamps(config_timestamps)
                 elif stored_timestamp:
-                    # Hash hasn't changed, but we have a previous timestamp - use it
+                    # Hash unchanged but we have a previous timestamp — use it
                     try:
                         password_change_timestamp = datetime.datetime.strptime(stored_timestamp, "%Y-%m-%d %H:%M:%S")
                     except ValueError:
                         pass
                 elif not stored_hash and current_hash:
-                    # First time checking this user - store the current hash but no timestamp yet
+                    # First time seeing this user — store hash, no timestamp yet
                     stored_data['validated_hash'] = current_hash
                     config_timestamps[username] = stored_data
                     save_config_timestamps(config_timestamps)
-                
+
                 # If we have a timestamp, check if it's recent and validate requirements
                 if password_change_timestamp:
                     today = datetime.datetime.now()
                     time_since_change = today - password_change_timestamp
-                    
+
                     # Check if password was changed within last 7 days
                     if time_since_change.days <= 7:
-                        # Step 2: Verify password requirements and timestamp tracking
-                        # Only test if we have requirements configured
                         if requirements_to_check:
                             test_results = test_password_requirements(
                                 requirements_to_check,
@@ -2064,8 +2123,6 @@ def user_change_password(vulnerability):
                                 username_to_test=username,
                                 password_change_date=password_change_timestamp
                             )
-                            
-                            # Check if password passes based on timestamp validation
                             if test_results.get('password_passes', False):
                                 record_hit(
                                     f"{username}'s password was changed after requirements were configured.",
@@ -2074,7 +2131,7 @@ def user_change_password(vulnerability):
                             else:
                                 record_miss("Account Management")
                         else:
-                            # No password requirements configured, just check if password was changed
+                            # No password requirements configured — just check for a change
                             record_hit(
                                 f"{username}'s password was changed.",
                                 vulnerability[vuln]["Points"],
@@ -2084,7 +2141,7 @@ def user_change_password(vulnerability):
                 else:
                     # Could not determine password change time
                     record_miss("Account Management")
-                        
+
             except subprocess.CalledProcessError as e:
                 print(f"Warning: Could not get password info for {username}: {e}")
                 record_miss("Account Management")
@@ -2619,7 +2676,6 @@ def check_ssh_permit_root_login():
         with open("/etc/ssh/sshd_config", "r") as ssh_config_file:
             for line in ssh_config_file:
                 stripped_line = line.strip()
-                
                 # Skip empty lines and comments
                 if not stripped_line or stripped_line.startswith("#"):
                     continue
@@ -2665,12 +2721,12 @@ def disable_SSH_Root_Login(vulnerability):
     ssh_config = check_ssh_permit_root_login()
     
     if not ssh_config['ssh_config_exists']:
-        # SSH config doesn't exist - SSH likely not installed (secure)
+        # SSH config doesn't exist - SSH likely not installed
         record_hit("SSH Root Login Disabled (SSH not configured).", vulnerability[1]["Points"])
         return
     
     if not ssh_config['permit_root_login_found']:
-        # Not found = commented out or doesn't exist = secure default
+        # Not found = commented out or doesn't exist which is default
         record_hit(
             "SSH Root Login Disabled (default or commented out).", 
             vulnerability[1]["Points"]
@@ -2729,7 +2785,6 @@ def check_kernel(vulnerability):
         
         # Step 1.5: Detect Ubuntu base version (important for derivatives like Mint)
         ubuntu_version = None
-        ubuntu_codename = None
         try:
             # Get both VERSION_ID and UBUNTU_CODENAME from /etc/os-release
             with open('/etc/os-release', 'r') as f:

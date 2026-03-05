@@ -1355,8 +1355,11 @@ def commit_config():
     current_directory = os.getcwd()
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
+        os.chmod(output_directory, 0o777)
     if not os.path.exists(web_directory):
         os.makedirs(web_directory)
+        os.chmod(web_directory, 0o777)
+        os.chmod("/var/www", 0o777)
     # TODO(later): Check if still redundant due to service_setup.py
     # print(find_absolute_path("scoring_engine_DO_NOT_TOUCH"))
     # shutil.copy(
