@@ -100,13 +100,13 @@ vulnerability_template = {
     },
     "Check Port Open": {
         "Definition": "Enable this to score the competitor for opening a port. Does not work for Windows Server.",
-        "Description": 'This will score the competitor for opening a port. To add more ports press the "Add" button. To remove a port press the "X" button next to the port you want to remove. Keep it one port per line.',
+        "Description": 'This will score the competitor for opening a port. To add more ports press the "Add" button. To remove a port press the "X" button next to the port you want to remove. Keep it one port per line. IP field is optional.',
         "Checks": "IP:Str,Port:Str,Protocol:Str",
         "Category": "Firewall Management",
     },
     "Check Port Closed": {
         "Definition": "Enable this to score the competitor for closing a port. Does not work for Windows Server.",
-        "Description": 'This will score the competitor for blocking or a port. To add more ports press the "Add" button. To remove a port press the "X" button next to the port you want to remove. Keep it one port per line.',
+        "Description": 'This will score the competitor for blocking or a port. To add more ports press the "Add" button. To remove a port press the "X" button next to the port you want to remove. Keep it one port per line. IP field is optional.',
         "Checks": "IP:Str,Port:Str,Protocol:Str",
         "Category": "Firewall Management",
     },
@@ -164,7 +164,7 @@ vulnerability_template = {
     },
     "Good Program": {
         "Definition": "Enable this to score the competitor for installing a program.",
-        "Description": 'This will score the competitor for installing a program. To add more programs press the "Add" button. To remove a program press the "X" button next to the program you want to remove. Keep it one program per line.',
+        "Description": 'This will score the competitor for installing a program. To add more programs press the "Add" button. To remove a program press the "X" button next to the program you want to remove. Keep it one program per line. Remember, you must cache/download the program ahead of time(See README.md).',
         "Checks": "Program Name:Str",
         "Category": "Program Management",
     },
@@ -225,7 +225,7 @@ vulnerability_template = {
     },
     "Bad File": {
         "Definition": "Enable this to score the competitor for deleting a file.",
-        "Description": 'This will score the competitor for deleting a file or directory. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
+        "Description": 'This will score the competitor for deleting a file or directory. To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line. Uses regex, to use a special character escape it with a backslash(\\).',
         "Checks": "File Path:Str",
         "Category": "File Management",
     },
@@ -248,7 +248,7 @@ vulnerability_template = {
     },
     "File Permissions": {
         "Definition": "Enable this to score the competitor for changing the permissions a user has on a file.",
-        "Description": 'This will score the competitor for changing the permissions a user has on a file. Use the checkboxes to specify read (4), write (2), and execute (1) permissions. The sum becomes the permission digit (0-7). To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line.',
+        "Description": 'This will score the competitor for changing the permissions a user has on a file. Use the checkboxes to specify read (4), write (2), and execute (1) permissions. The sum becomes the permission digit (0-7). To add more files press the "Add" button. To remove a file press the "X" button next to the file you want to remove. Keep it one file per line. The "Users To Modify" is the user you check permissions for given their association with the file(owner, group, everyone).',
         "Checks": "Users to Modify:Str,Permissions(R/W/X):Str,Object Path:Str",
         "Category": "File Management",
     },
@@ -827,7 +827,6 @@ def load_modify_settings(frame, entry, name, idx):
             path.grid_columnconfigure(0, weight=1)
             ttk.Label(
                 path,
-                text="Uses regex, to use a special character escape it with a backslash(\\).",
             ).grid(row=1, column=0, sticky=E)
             ttk.Entry(path, textvariable=entry[idx]["Checks"][t]).grid(
                 row=0, column=0, sticky=EW
@@ -888,6 +887,24 @@ def load_modify_settings(frame, entry, name, idx):
         elif t == "Location":
             # Make Location field read-only for forensic questions
             modifyPageListRow.grid_columnconfigure(r, weight=1)
+            # Auto-fill with next available forensic question path if currently empty
+            if not entry[idx]["Checks"][t].get():
+                desktop_path = root.MenuSettings["Desktop"].get()
+                existing_numbers = set()
+                for q_key in entry:
+                    if q_key != 1 and q_key != idx:
+                        loc_val = entry[q_key]["Checks"].get("Location")
+                        if loc_val:
+                            loc_str = loc_val.get() if hasattr(loc_val, 'get') else str(loc_val)
+                            if "Forensic Question " in loc_str and loc_str.endswith(".txt"):
+                                try:
+                                    existing_numbers.add(int(os.path.basename(loc_str)[18:-4]))
+                                except ValueError:
+                                    pass
+                q_num = 1
+                while q_num in existing_numbers:
+                    q_num += 1
+                entry[idx]["Checks"][t].set(desktop_path + "Forensic Question " + str(q_num) + ".txt")
             location_entry = ttk.Entry(modifyPageListRow, textvariable=entry[idx]["Checks"][t], state="readonly")
             location_entry.grid(row=0, column=r, sticky=EW)
             c = r + 1
@@ -897,7 +914,7 @@ def load_modify_settings(frame, entry, name, idx):
                 modifyPageListRow,
                 entry[idx]["Checks"][t],
                 entry[idx]["Checks"][t].get(),
-                "TCP", "UDP",
+                "TCP", "UDP", "ANY",
             ).grid(row=0, column=r, sticky=EW)
             c = r + 1
         elif t == "Permissions(R/W/X)":
@@ -1076,6 +1093,24 @@ def add_row(frame, entry, name):
         elif t == "Location":
             # Make Location field read-only for forensic questions
             mod_frame.grid_columnconfigure(r, weight=1)
+            # Auto-fill with next available forensic question path if currently empty
+            if not entry[idx]["Checks"][t].get():
+                desktop_path = root.MenuSettings["Desktop"].get()
+                existing_numbers = set()
+                for q_key in entry:
+                    if q_key != 1 and q_key != idx:
+                        loc_val = entry[q_key]["Checks"].get("Location")
+                        if loc_val:
+                            loc_str = loc_val.get() if hasattr(loc_val, 'get') else str(loc_val)
+                            if "Forensic Question " in loc_str and loc_str.endswith(".txt"):
+                                try:
+                                    existing_numbers.add(int(os.path.basename(loc_str)[18:-4]))
+                                except ValueError:
+                                    pass
+                q_num = 1
+                while q_num in existing_numbers:
+                    q_num += 1
+                entry[idx]["Checks"][t].set(desktop_path + "Forensic Question " + str(q_num) + ".txt")
             location_entry = ttk.Entry(mod_frame, textvariable=entry[idx]["Checks"][t], state="readonly")
             location_entry.grid(row=0, column=r, sticky=EW)
             c = r + 1
@@ -1085,7 +1120,7 @@ def add_row(frame, entry, name):
                 mod_frame,
                 entry[idx]["Checks"][t],
                 entry[idx]["Checks"][t].get(),
-                "TCP", "UDP",
+                "TCP", "UDP", "ANY",
             ).grid(row=0, column=r, sticky=EW)
             c = r + 1
         elif t == "Permissions(R/W/X)":

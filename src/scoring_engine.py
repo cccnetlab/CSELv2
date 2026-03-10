@@ -312,7 +312,7 @@ def initialize_score_report():
             "\n"
         )
         file.write(
-            '<table align="center" cellpadding="10"><tr><td><img src="' + LOGO_URI + '"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="' + ICONS_URI + "/SoCalCCCC.png" + '"></td></tr></table><br><H2>Your Score: 0/'
+            '<table align="center" cellpadding="10"><tr><td><img src="' + ICONS_URI + "/logo.png" + '"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="' + ICONS_URI + "/SoCalCCCC.png" + '"></td></tr></table><br><H2>Your Score: 0/'
             + str(current_settings["Tally Points"])
             + "</H2><H2>Vulnerabilities: 0/"
             + str(current_settings["Tally Vulnerabilities"])
@@ -1030,21 +1030,21 @@ def portVulns(vulnerability, name):
             # IP filtering: disabled for empty / wildcard addresses
             ip_filter = config_ip not in ("", " ", "0.0.0.0", "::", "anywhere")
 
-            def first_applicable_rule(is_v6_target):
+            def first_applicable_rule(is_v6_target, proto_override=None):
                 """
                 Return the first (lowest-numbered) UFW rule that matches
                 port + protocol + IP requirements for the given IP version.
-                Rules are already stored in priority order from ufw status numbered output.
+                proto_override: if provided, use instead of the outer `protocol` var
+                (used when protocol == 'any' to check tcp and udp separately).
                 """
+                check_proto = proto_override if proto_override is not None else protocol
                 for r in parsed_rules:  # already in priority order — no sort needed
-                    print("DEBUG: Evaluating rule:", r)
-                    print(f"DEBUG: Configuration - port={port}, protocol={protocol}, ip_filter={ip_filter}, config_ip={config_ip}, is_v6_target={is_v6_target}")
                     if r['port'] != port:
                         continue
                     if r['is_v6'] != is_v6_target:
                         continue
-                    # Protocol: rule proto 'any' covers both tcp and udp
-                    if r['proto'] != 'any' and r['proto'] != protocol:
+                    # Rule proto 'any' (no qualifier in UFW) covers both tcp and udp
+                    if r['proto'] != 'any' and r['proto'] != check_proto:
                         continue
                     # From: must satisfy IP requirement
                     if ip_filter:
@@ -1058,57 +1058,93 @@ def portVulns(vulnerability, name):
                     return r
                 return None
 
-            first_v4 = first_applicable_rule(False)
-            # Only check v6 when no specific IP is configured; a specific IP is
-            # always an IPv4 address so its UFW rule will never appear as a v6 rule.
-            first_v6 = None if ip_filter else first_applicable_rule(True)
-
-            has_v4_allow = first_v4 is not None and first_v4['action'] == 'allow'
-            has_v6_allow = first_v6 is not None and first_v6['action'] == 'allow'
-            has_allow    = has_v4_allow or has_v6_allow
-            has_v4_deny  = first_v4 is not None and first_v4['action'] == 'deny'
-            has_v6_deny  = first_v6 is not None and first_v6['action'] == 'deny'
-
             display_name = program_name if program_name else f"Port {port}"
-            proto_label  = protocol.upper()
 
-            if expect_open:
-                # Port Open: need an explicit ALLOW rule
-                if has_allow:
-                    record_hit(
-                        f"{display_name} ({proto_label}/{port}) is allowed by UFW",
-                        vulnerability[vuln]["Points"],
-                    )
+            if protocol == 'any':
+                # "ANY" protocol: score a HIT only when BOTH tcp and udp satisfy
+                # the open/closed requirement (via protocol-specific or catch-all rules).
+                tcp_v4 = first_applicable_rule(False, 'tcp')
+                tcp_v6 = None if ip_filter else first_applicable_rule(True, 'tcp')
+                udp_v4 = first_applicable_rule(False, 'udp')
+                udp_v6 = None if ip_filter else first_applicable_rule(True, 'udp')
+
+                tcp_allowed = (tcp_v4 is not None and tcp_v4['action'] == 'allow') or \
+                              (tcp_v6 is not None and tcp_v6['action'] == 'allow')
+                udp_allowed = (udp_v4 is not None and udp_v4['action'] == 'allow') or \
+                              (udp_v6 is not None and udp_v6['action'] == 'allow')
+
+                if expect_open:
+                    # Both protocols must be explicitly allowed
+                    if tcp_allowed and udp_allowed:
+                        record_hit(
+                            f"{display_name} (TCP+UDP/{port}) is allowed by UFW",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Firewall Management")
                 else:
-                    record_miss("Firewall Management")
+                    if not ufw_active:
+                        record_miss("Firewall Management")
+                    elif tcp_allowed or udp_allowed:
+                        # At least one protocol still has an ALLOW rule
+                        record_miss("Firewall Management")
+                    else:
+                        record_hit(
+                            f"{display_name} (TCP+UDP/{port}) is closed — not allowed (UFW default deny)",
+                            vulnerability[vuln]["Points"],
+                        )
 
             else:
-                # Port Closed: all applicable sides must have no ALLOW rule.
-                # When an IP is specified only v4 is checked; otherwise both v4 and v6.
-                if not ufw_active:
-                    # UFW inactive — default deny is not in effect, can't confirm closed
-                    record_miss("Firewall Management")
-                elif has_v4_allow or has_v6_allow:
-                    # At least one checked side still has an ALLOW rule
-                    record_miss("Firewall Management")
-                else:
-                    if ip_filter:
-                        # IP-specific check: only v4 matters
-                        reason = "explicitly denied by UFW (IPv4)" if has_v4_deny else "not allowed (UFW default deny)"
+                first_v4 = first_applicable_rule(False)
+                # Only check v6 when no specific IP is configured; a specific IP is
+                # always an IPv4 address so its UFW rule will never appear as a v6 rule.
+                first_v6 = None if ip_filter else first_applicable_rule(True)
+
+                has_v4_allow = first_v4 is not None and first_v4['action'] == 'allow'
+                has_v6_allow = first_v6 is not None and first_v6['action'] == 'allow'
+                has_allow    = has_v4_allow or has_v6_allow
+                has_v4_deny  = first_v4 is not None and first_v4['action'] == 'deny'
+                has_v6_deny  = first_v6 is not None and first_v6['action'] == 'deny'
+
+                proto_label  = protocol.upper()
+
+                if expect_open:
+                    # Port Open: need an explicit ALLOW rule
+                    if has_allow:
+                        record_hit(
+                            f"{display_name} ({proto_label}/{port}) is allowed by UFW",
+                            vulnerability[vuln]["Points"],
+                        )
                     else:
-                        # No IP: both v4 and v6 checked
-                        if has_v4_deny and has_v6_deny:
-                            reason = "explicitly denied by UFW (IPv4 and IPv6)"
-                        elif has_v4_deny:
-                            reason = "explicitly denied by UFW (IPv4, IPv6 default deny)"
-                        elif has_v6_deny:
-                            reason = "explicitly denied by UFW (IPv6, IPv4 default deny)"
+                        record_miss("Firewall Management")
+
+                else:
+                    # Port Closed: all applicable sides must have no ALLOW rule.
+                    # When an IP is specified only v4 is checked; otherwise both v4 and v6.
+                    if not ufw_active:
+                        # UFW inactive — default deny is not in effect, can't confirm closed
+                        record_miss("Firewall Management")
+                    elif has_v4_allow or has_v6_allow:
+                        # At least one checked side still has an ALLOW rule
+                        record_miss("Firewall Management")
+                    else:
+                        if ip_filter:
+                            # IP-specific check: only v4 matters
+                            reason = "explicitly denied by UFW (IPv4)" if has_v4_deny else "not allowed (UFW default deny)"
                         else:
-                            reason = "not allowed (UFW default deny)"
-                    record_hit(
-                        f"{display_name} ({proto_label}/{port}) is closed — {reason}",
-                        vulnerability[vuln]["Points"],
-                    )
+                            # No IP: both v4 and v6 checked
+                            if has_v4_deny and has_v6_deny:
+                                reason = "explicitly denied by UFW (IPv4 and IPv6)"
+                            elif has_v4_deny:
+                                reason = "explicitly denied by UFW (IPv4, IPv6 default deny)"
+                            elif has_v6_deny:
+                                reason = "explicitly denied by UFW (IPv6, IPv4 default deny)"
+                            else:
+                                reason = "not allowed (UFW default deny)"
+                        record_hit(
+                            f"{display_name} ({proto_label}/{port}) is closed — {reason}",
+                            vulnerability[vuln]["Points"],
+                        )
 
 
 def audit_check():
@@ -2150,69 +2186,98 @@ def user_change_password(vulnerability):
                 record_miss("Account Management")
 
 
-# check
-def check_startup(vulnerability):
-    """
-    Checks if specific programs are set to run at startup and records hits/misses.
+# Deprecated
+# def check_startup(vulnerability):
+#     """
+#     Checks if specific programs are set to run at startup and records hits/misses.
     
-    Args:
-        vulnerability (list): A list of vulnerabilities to check.
-    """
-    file = open("startup.txt", "r", encoding="utf-16-le")
-    content = file.read().splitlines()
-    file.close()
-    for vuln in vulnerability:
-        if vuln != 1:
-            if vulnerability[vuln]["Program Name"] in content:
-                record_hit(
-                    "Program Removed from Startup", vulnerability[vuln]["Points"]
-                )
-            else:
-                record_miss("Program Management")
+#     Args:
+#         vulnerability (list): A list of vulnerabilities to check.
+#     """
+#     file = open("startup.txt", "r", encoding="utf-16-le")
+#     content = file.read().splitlines()
+#     file.close()
+#     for vuln in vulnerability:
+#         if vuln != 1:
+#             if vulnerability[vuln]["Program Name"] in content:
+#                 record_hit(
+#                     "Program Removed from Startup", vulnerability[vuln]["Points"]
+#                 )
+#             else:
+#                 record_miss("Program Management")
 
 
 def update_check_period(vulnerability):
     """
+    Checks if automatic update checks are enabled.
+    No internet connection required — both methods read local configuration only.
+
+    Ubuntu:
+        Uses `apt-config dump APT::Periodic::Update-Package-Lists` to read the
+        effective value across all /etc/apt/apt.conf.d/ files (e.g. 10periodic,
+        20auto-upgrades).  A value of "1" means daily update-list checks are on.
+
     Linux Mint:
-    gsettings get com.linuxmint.updates refresh-schedule-enabled
+        gsettings get com.linuxmint.updates refresh-schedule-enabled
+        Returns 'true' if enabled.
     """
+    enabled = False
 
-    # --- determine user to run gsettings as ---
-    user = os.environ.get("SUDO_USER")
-    if not user:
-        user = os.environ.get("USER")
-    if not user:
+    if OSTYPE == "ubuntu":
+        # Ubuntu: read effective APT periodic setting via apt-config (local only)
         try:
-            user = os.getlogin()
-        except OSError:
-            user = None
-    
-    if not user:
-        print("ERROR: Could not determine user for gsettings command")
-        record_miss("Program Management")
-        return
+            result = subprocess.run(
+                ["apt-config", "dump", "APT::Periodic::Update-Package-Lists"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            # Output example: APT::Periodic::Update-Package-Lists "1";
+            match = re.search(
+                r'APT::Periodic::Update-Package-Lists\s+"(\d+)"', result.stdout
+            )
+            if match:
+                enabled = match.group(1) == "1"
+        except Exception:
+            enabled = False
 
-    # --- run gsettings ---
-    try:
-        result = subprocess.run(
-            [
-                "sudo",
-                "-u",
-                user,
-                "gsettings",
-                "get",
-                "com.linuxmint.updates",
-                "refresh-schedule-enabled",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+    else:
+        # Linux Mint: check gsettings for the update manager refresh schedule
 
-        enabled = result.stdout.strip().lower() == "true"
+        # --- determine user to run gsettings as ---
+        user = os.environ.get("SUDO_USER")
+        if not user:
+            user = os.environ.get("USER")
+        if not user:
+            try:
+                user = os.getlogin()
+            except OSError:
+                user = None
 
-    except Exception:
-        enabled = False
+        if not user:
+            print("ERROR: Could not determine user for gsettings command")
+            record_miss("Program Management")
+            return
+
+        # --- run gsettings ---
+        try:
+            result = subprocess.run(
+                [
+                    "sudo",
+                    "-u",
+                    user,
+                    "gsettings",
+                    "get",
+                    "com.linuxmint.updates",
+                    "refresh-schedule-enabled",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            enabled = result.stdout.strip().lower() == "true"
+        except Exception:
+            enabled = False
 
     # --- scoring ---
     if enabled:

@@ -60,7 +60,7 @@ Added the scoring engine as a service. Fixed vulnerability issues. Streamlined i
 
 #### Update By @joshkimchifriedrice
 
-# 3.1.0(2026-2-26) Vulnerability fixes
+# 3.1.1(2026-2-26) Vulnerability fixes
 # Release Summary
 Fixed various vulnerability issues.
 
@@ -68,6 +68,24 @@ Fixed various vulnerability issues.
 - Overhauled logic for **check startup** vulnerability and tested.
 - Fixed string matching for the **check hosts** vulnerability for a default file.
 - Fixed port open and closed vulnerabilities to allow for empty ip address and to consider numbered order for ufw rules.
+- Added option for open and closed port to have any protocol.
 
 ## Known Issues
-- Update program untested
+- Check Kernel development requires internet
+- Update program development requires internet
+
+#### Update By @joshkimchifriedrice
+
+# 3.2.0(2026-3-xx) Ubuntu Compatability
+# Release Summary
+Modified the scoring engine to detect os and differentiate between ubuntu and linuxmint. Updated implementation to handle differences.
+
+## Changes
+- Added ostype() to detect ostypes(ubuntu and linuxmint currently supported only).
+- Update Check Period now handles ubuntu specific configurations.
+- Creates .html file instead of .desktop for scoring report due to ubuntu directory permissions restrictions.
+- Fixed ubuntu specific issues with send_notification(message).
+
+## Known Issues
+- Couldn't figure out offline Check Kernel implementation
+- Couldn't figure out offline Update Program implementation
