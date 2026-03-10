@@ -156,6 +156,7 @@ Categories=Utility;
 EOF
 chmod +x "${DESKTOP_DIR}/Stop_Scoring_Engine.desktop"
 chown "${ACTUAL_USER}":"${ACTUAL_USER}" "${DESKTOP_DIR}/Stop_Scoring_Engine.desktop"
+sudo -u "${ACTUAL_USER}" gio set "${DESKTOP_DIR}/Stop_Scoring_Engine.desktop" metadata::trusted true
 echo "✓ Created Stop Scoring Engine desktop shortcut"
 
 # ==================== STEP 6: Run Configurator ====================
