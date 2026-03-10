@@ -85,6 +85,7 @@ Modified the scoring engine to detect os and differentiate between ubuntu and li
 - Update Check Period now handles ubuntu specific configurations.
 - Creates .html file instead of .desktop for scoring report due to ubuntu directory permissions restrictions.
 - Fixed ubuntu specific issues with send_notification(message).
+- README fixed broken image links.
 
 ## Known Issues
 - Couldn't figure out offline Check Kernel implementation
