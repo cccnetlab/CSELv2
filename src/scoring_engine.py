@@ -24,11 +24,13 @@ import warnings
 import json
 from inotify_simple import INotify, flags
 from pathlib import Path
+import xdg.BaseDirectory as xdg_base
 
 # Add parent directory to path for relative imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src import admin_test
 from src import db_handler
+from src import pamtester
 
 ### DEVELOPER TOOL ###
 """ 
@@ -36,9 +38,40 @@ Set to True to enable developer mode features,
 will refresh database to match configurator updates on every iteration, 
 so you can have the scoring engine running while commiting configurations.
 """
-developerMode = True  
+developerMode = False
 ########################
 
+# Global flag to track if completion notification has been sent
+completion_notification_sent = False
+
+# ── Local policy inotify cache ────────────────────────────────────────────────
+# Stores hit/miss/penalty results from local_policies() so the checks only
+# re-run when /etc/pam.d, /etc/security, or /etc/login.defs actually change.
+local_policy_cache: dict = {
+    # Each entry: ('hit', name, points) | ('miss', name) | ('penalty', name, points)
+    'events': [],
+    'populated': False,  # True once the cache has been filled at least once
+}
+# Set True by the main loop when no policy file changes were detected and the
+# cache is already populated — tells local_policies() to replay instead of re-run.
+_local_policy_cache_valid: bool = False
+# Set True only during an active (non-replay) local_policies() run so that
+# record_hit / record_miss / record_penalty can store results into the cache.
+_capturing_policy_events: bool = False
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── SSH config inotify cache ──────────────────────────────────────────────────
+# Stores the PermitRootLogin check result so it only re-checks when sshd_config
+# actually changes.
+ssh_config_cache: dict = {
+    'permit_root_login': None,  # None | 'found' | 'not_found'
+    'permit_root_login_value': None,  # The actual value if found
+    'populated': False,  # True once the cache has been filled at least once
+}
+# Set True by the main loop when no sshd_config changes were detected and the
+# cache is already populated — tells check_ssh_permit_root_login() to use cache.
+_ssh_config_cache_valid: bool = False
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Path for storing password requirement configuration timestamps
 TIMESTAMP_FILE = "/etc/CYBERPATRIOT/password_config_timestamps.json"
@@ -82,22 +115,26 @@ def save_config_timestamps(timestamps):
 def draw_head():
     """
     Creates the header of the scoring report HTML file.
-    Initializes the HTML structure and includes title and refresh meta tag.
-    Writes the initial content to the score index file.
+    Writes to a temporary file (scoreIndex + ".tmp") so the public-facing
+    scoreIndex is never overwritten until draw_tail() has a fully-scored,
+    placeholder-free report ready to swap in atomically.
     """
-    file = open(scoreIndex, "w+")
-    file.write(
-        '<!doctype html><html><head><title>CSEL Score Report</title><meta http-equiv="refresh" content="60"></head><body style="background-color:powderblue;">'
-        "\n"
-    )
-    file.write(
-        '<table align="center" cellpadding="10"><tr><td><img src="file:///var/www/CYBERPATRIOT/CCC_logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="file:///var/www/CYBERPATRIOT/SoCalCCCC.png"></td></tr></table>If you see this wait a few seconds then refresh<br><H2>Your Score: #TotalScore#/'
-        + str(menuSettings["Tally Points"])
-        + "</H2><H2>Vulnerabilities: #TotalVuln#/"
-        + str(menuSettings["Tally Vulnerabilities"])
-        + "</H2><hr>"
-    )
-    file.close()
+    score_dir = os.path.dirname(scoreIndex)
+    if not os.path.exists(score_dir):
+        os.makedirs(score_dir, exist_ok=True)
+
+    with open(scoreIndex + ".tmp", "w+") as file:
+        file.write(
+            '<!doctype html><html><head><title>CSEL Score Report</title><meta http-equiv="refresh" content="60"></head><body style="background-color:powderblue;">'
+            "\n"
+        )
+        file.write(
+            '<table align="center" cellpadding="10"><tr><td><img src="file:///var/www/CYBERPATRIOT/CCC_logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="file:///var/www/CYBERPATRIOT/SoCalCCCC.png"></td></tr></table><br><H2>Your Score: #TotalScore#/'
+            + str(menuSettings["Tally Points"])
+            + "</H2><H2>Vulnerabilities: #TotalVuln#/"
+            + str(menuSettings["Tally Vulnerabilities"])
+            + "</H2><hr>"
+        )
 
 
 def record_hit(name, points):
@@ -109,6 +146,8 @@ def record_hit(name, points):
         points (int): The points awarded for the event.
     """
     global total_points, total_vulnerabilities
+    if _capturing_policy_events:
+        local_policy_cache['events'].append(('hit', name, int(points)))
     write_to_html(
         ('<p style="color:green">' + name + " (" + str(points) + " points)</p>")
     )
@@ -123,6 +162,8 @@ def record_miss(name):
     Args:
         name (str): The name of the missed scoring event.
     """
+    if _capturing_policy_events:
+        local_policy_cache['events'].append(('miss', name))
     if not menuSettings["Silent Mode"]:
         write_to_html(('<p style="color:red">MISS ' + name + " Issue</p>"))
 
@@ -136,6 +177,8 @@ def record_penalty(name, points):
         points (int): The points to deduct for the penalty.
     """
     global total_points
+    if _capturing_policy_events:
+        local_policy_cache['events'].append(('penalty', name, int(points)))
     write_to_html(
         ('<p style="color:red">' + name + " (" + str(points) + " points)</p>")
     )
@@ -149,6 +192,10 @@ def display_html_sh(path):
     Args:
         path (str): The path to the user's desktop directory.
     """
+    # Ensure the Desktop directory exists
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+    
     with open(path + "ScoringReport.desktop", "w") as dt_f:
         dt_f.write(
             """[Desktop Entry]
@@ -164,25 +211,30 @@ Terminal = false"""
 def draw_tail():
     """
     Completes the scoring report HTML file by adding the footer content.
-    Updates the score and vulnerabilities in the HTML file.
+    Resolves #TotalScore# and #TotalVuln# placeholders in the temp file,
+    then atomically renames it over scoreIndex so the public-facing report
+    is only ever replaced with a fully-scored, complete page.
     Sets permissions and ownership for the score index file.
     """
     write_to_html('<hr><div align="center"><b>Coastline College</b>')
-    replace_section(scoreIndex, "#TotalScore#", str(total_points))
-    replace_section(scoreIndex, "#TotalVuln#", str(total_vulnerabilities))
-    replace_section(scoreIndex, "If you see this wait a few seconds then refresh", "")
+    tmp = scoreIndex + ".tmp"
+    replace_section(tmp, "#TotalScore#", str(total_points))
+    replace_section(tmp, "#TotalVuln#", str(total_vulnerabilities))
+    # Atomically swap the finished temp file into place
+    os.replace(tmp, scoreIndex)
+    actual_user, actual_uid = get_actual_user_info()
     os.chmod(scoreIndex, 0o777)
-    os.chown(scoreIndex, int(os.environ["SUDO_UID"]), int(os.environ["SUDO_UID"]))
-    # shutil.copy('/var/www/CYBERPATRIOT/ScoreReport.html', '/home/'+ os.environ['SUDO_USER'] + '/Desktop/')
-    # os.chown ( '/home/'+ os.environ['SUDO_USER'] + '/Desktop/ScoreReport.html', int(os.environ['SUDO_UID']), int(os.environ['SUDO_UID']))
-    display_html_sh("/home/" + os.environ["SUDO_USER"] + "/Desktop/")
+    os.chown(scoreIndex, actual_uid, actual_uid)
+    # shutil.copy('/var/www/CYBERPATRIOT/ScoreReport.html', '/home/' + actual_user + '/Desktop/')
+    # os.chown('/home/' + actual_user + '/Desktop/ScoreReport.html', actual_uid, actual_uid)
+    display_html_sh("/home/" + actual_user + "/Desktop/")
     os.chown(
-        "/home/" + os.environ["SUDO_USER"] + "/Desktop/ScoringReport.desktop",
-        int(os.environ["SUDO_UID"]),
-        int(os.environ["SUDO_UID"]),
+        "/home/" + actual_user + "/Desktop/ScoringReport.desktop",
+        actual_uid,
+        actual_uid,
     )
     os.chmod(
-        "/home/" + os.environ["SUDO_USER"] + "/Desktop/ScoringReport.desktop", 0o770
+        "/home/" + actual_user + "/Desktop/ScoringReport.desktop", 0o770
     )
 
 
@@ -198,6 +250,11 @@ def initialize_score_report():
     
     # Create the score report file path
     score_index_path = "/var/www/CYBERPATRIOT/ScoreReport.html"
+    
+    # Ensure the directory exists
+    score_dir = os.path.dirname(score_index_path)
+    if not os.path.exists(score_dir):
+        os.makedirs(score_dir, exist_ok=True)
     
     # Create the HTML file with updated totals
     with open(score_index_path, "w+") as file:
@@ -218,133 +275,155 @@ def initialize_score_report():
         file.write('<hr><div align="center"><b>Coastline College</b></div></body></html>')
     
     # Set proper permissions and ownership
+    actual_user, actual_uid = get_actual_user_info()
     os.chmod(score_index_path, 0o777)
-    os.chown(score_index_path, int(os.environ["SUDO_UID"]), int(os.environ["SUDO_UID"]))
-    
+    os.chown(score_index_path, actual_uid, actual_uid)
+
     # Ensure desktop icon exists
-    display_html_sh("/home/" + os.environ["SUDO_USER"] + "/Desktop/")
+    display_html_sh("/home/" + actual_user + "/Desktop/")
     os.chown(
-        "/home/" + os.environ["SUDO_USER"] + "/Desktop/ScoringReport.desktop",
-        int(os.environ["SUDO_UID"]),
-        int(os.environ["SUDO_UID"]),
+        "/home/" + actual_user + "/Desktop/ScoringReport.desktop",
+        actual_uid,
+        actual_uid,
     )
     os.chmod(
-        "/home/" + os.environ["SUDO_USER"] + "/Desktop/ScoringReport.desktop", 0o770
+        "/home/" + actual_user + "/Desktop/ScoringReport.desktop", 0o770
     )
 
 
 # Extra Functions
+def get_actual_user_info():
+    """
+    Resolves the real (non-root) user and their UID regardless of how the
+    process was launched — via `sudo`, directly as root, or as a systemd service.
+
+    Priority:
+      1. ACTUAL_USER / ACTUAL_UID   (set by service_setup.py in the unit file)
+      2. SUDO_USER  / SUDO_UID      (set by sudo when run manually)
+      3. First human user found under /home with a valid UID >= 1000 (fallback)
+
+    Returns:
+        tuple[str, int]: (username, uid) of the actual user, or ("root", 0) if
+                         none can be determined.
+    """
+    user = os.environ.get("ACTUAL_USER") or os.environ.get("SUDO_USER")
+    uid_str = os.environ.get("ACTUAL_UID") or os.environ.get("SUDO_UID")
+
+    if user and uid_str:
+        try:
+            return user, int(uid_str)
+        except ValueError:
+            pass
+
+    # Fallback: walk /home and find first real user (UID >= 1000)
+    if user:
+        try:
+            return user, pwd.getpwnam(user).pw_uid
+        except KeyError:
+            pass
+
+    try:
+        for entry in os.scandir("/home"):
+            if entry.is_dir():
+                try:
+                    info = pwd.getpwnam(entry.name)
+                    if info.pw_uid >= 1000:
+                        print(f"WARNING: Falling back to /home user '{entry.name}' for file ownership.")
+                        return entry.name, info.pw_uid
+                except KeyError:
+                    pass
+    except OSError:
+        pass
+
+    print("WARNING: Could not determine actual user — file ownership will default to root.")
+    return "root", 0
+
+
 def check_runas():
     """
     Checks if the script is running with administrator privileges.
     If not, prompts the user to run as admin and exits.
     """
     if not admin_test.isUserAdmin():
-        messagebox.showerror(
-            "Administrator Access Needed",
-            "Please make sure the scoring engine is running as admin.",
-        )
+        print("ERROR: Administrator Access Needed - Please make sure the scoring engine is running as admin.")
         exit(admin_test.runAsAdmin())
 
 
 def check_score():
-    """
-    Checks the current score against the menu settings.
-    Sends notifications if points are gained or lost.
-    Logs any exceptions that occur during the check.
-    """
-    global total_points, total_vulnerabilities
-    try:
-        current_user = os.getlogin()
-        getpwnam(current_user).pw_uid
-        menuSettings["Current Vulnerabilities"] = total_vulnerabilities
-        if total_points > menuSettings["Current Points"]:
-            menuSettings["Current Points"] = total_points
-            Settings.update_score(menuSettings)
+    global total_points, total_vulnerabilities, completion_notification_sent
+    
+    menuSettings["Current Vulnerabilities"] = total_vulnerabilities
+    
+    def send_notification(message):
+        """Send notification as the actual user using sudo"""
+        actual_user = os.environ.get("ACTUAL_USER")
+        actual_uid = os.environ.get("ACTUAL_UID")
+        
+        if not actual_user or not actual_uid:
+            # Fallback to SUDO_USER if ACTUAL_USER not set (running directly with sudo)
+            actual_user = os.environ.get("SUDO_USER")
+            if actual_user:
+                try:
+                    actual_uid = str(getpwnam(actual_user).pw_uid)
+                except:
+                    print("Warning: Cannot send notification - user info not available")
+                    return
+            else:
+                print("Warning: Cannot send notification - user info not available")
+                return
+        
+        try:
+            # Set up environment for the user's D-Bus session
+            env = os.environ.copy()
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{actual_uid}/bus"
+            env["DISPLAY"] = ":0"
+            env["XDG_RUNTIME_DIR"] = f"/run/user/{actual_uid}"
+            
+            # Run notify-send as the actual user
             subprocess.run(
-                [
-                    "sudo",
-                    "-u",
-                    os.environ["SUDO_USER"],
-                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus".format(
-                        getpwnam(current_user).pw_uid
-                    ),
-                    "notify-send",
-                    "-i",
-                    "utilities-terminal",
-                    "CyberPatriot",
-                    "You've gained points!",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=True,
+                ["sudo", "-u", actual_user, "notify-send", 
+                 "-i", "utilities-terminal", 
+                 "CyberPatriot", 
+                 message],
+                env=env,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
             )
-        elif total_points < menuSettings["Current Points"]:
-            menuSettings["Current Points"] = total_points
-            Settings.update_score(menuSettings)
-            subprocess.run(
-                [
-                    "sudo",
-                    "-u",
-                    os.environ["SUDO_USER"],
-                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus".format(
-                        getpwnam(current_user).pw_uid
-                    ),
-                    "notify-send",
-                    "-i",
-                    "utilities-terminal",
-                    "CyberPatriot",
-                    "You've lost points!",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=True,
-            )
-            if (
-                total_points == menuSettings["Tally Points"]
-                and total_vulnerabilities == menuSettings["Tally Vulnerabilities"]
-            ):
-                subprocess.run(
-                    [
-                        "sudo",
-                        "-u",
-                        os.environ["SUDO_USER"],
-                        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{}/bus".format(
-                            getpwnam(current_user).pw_uid
-                        ),
-                        "notify-send",
-                        "-i",
-                        "utilities-terminal",
-                        "CyberPatriot",
-                        "You've completed the image!",
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=True,
-                )
-    except:
-        f = open("scoring_engine.log", "w")
-        e = traceback.format_exc()
-        f.write(str(e))
-        f.close()
-        messagebox.showerror(
-            "Crash Report",
-            "The scoring engine has stopped working, a log has been saved to "
-            + os.path.abspath("scoring_engine.log"),
-        )
-        sys.exit()
+        except Exception as e:
+            print(f"Notification failed: {e}")
+    
+    if total_points > menuSettings["Current Points"]:
+        menuSettings["Current Points"] = total_points
+        Settings.update_score(menuSettings)
+        send_notification("You've gained points!")
+        
+    elif total_points < menuSettings["Current Points"]:
+        menuSettings["Current Points"] = total_points
+        Settings.update_score(menuSettings)
+        send_notification("You've lost points!")
+        # Reset completion notification if points are lost
+        completion_notification_sent = False
+        
+    if (total_points == menuSettings["Tally Points"] and 
+        total_vulnerabilities == menuSettings["Tally Vulnerabilities"]):
+        # Only send notification if it hasn't been sent yet
+        if not completion_notification_sent:
+            send_notification("You've completed the image!")
+            completion_notification_sent = True
 
 
 def write_to_html(message):
     """
-    Appends a message to the scoring report HTML file.
-    
+    Appends a message to the in-progress scoring report temp file.
+    The temp file is atomically renamed to scoreIndex by draw_tail() once
+    all scoring is complete and placeholders have been resolved.
+
     Args:
         message (str): The message to write to the HTML file.
     """
-    file = open(scoreIndex, "a")
-    file.write(message)
-    file.close()
+    with open(scoreIndex + ".tmp", "a") as file:
+        file.write(message)
 
 
 def replace_section(loc, search, replace):
@@ -638,7 +717,7 @@ def check_ufw_rule(port, protocol):
         return "ALLOW"
 
 
-def portVulns(vulnerability, name):
+def portVulnsOld(vulnerability, name):
     """
     Checks for open or closed ports based on the provided vulnerabilities.
     Handles both TCP and UDP protocols, and supports IPv4/IPv6 addresses.
@@ -662,7 +741,6 @@ def portVulns(vulnerability, name):
             # Get configuration values with defaults for missing fields
             protocol = vulnerability[vuln].get("Protocol", "TCP")
             host = vulnerability[vuln].get("IP", "")
-            print("DEBUG: Initial host ip notation:", host)
             port_str = vulnerability[vuln].get("Port", "")
             program_name = vulnerability[vuln].get("Program Name", "")
             
@@ -744,6 +822,230 @@ def portVulns(vulnerability, name):
                 )
             else:
                 record_miss("Firewall Management")
+
+def portVulns(vulnerability, name):
+    """
+    Checks open/closed port rules based solely on UFW policy.
+
+    For "Check Port Open":
+        HIT  — an explicit ALLOW rule exists for the port that covers the
+               required protocol (a protocol-less rule e.g. "ALLOW 22" covers
+               both TCP and UDP) and whose From is "Anywhere" or the configured IP.
+        MISS — no such ALLOW rule exists.
+
+    For "Check Port Closed":
+        HIT  — no ALLOW rule exists for BOTH the IPv4 and IPv6 rule entries
+               (UFW default-deny covers each, or an explicit DENY/REJECT exists).
+               UFW inactive → MISS (no default-deny in effect).
+        MISS — an ALLOW rule exists for the port on either IPv4 or IPv6.
+
+    IP filtering (only when a specific IP is configured):
+        A rule is considered only if its From field is "Anywhere"
+        (rule applies to all sources) or exactly the configured IP.
+        Empty IP / "0.0.0.0" / "::" → no IP filtering.
+
+    Args:
+        vulnerability (list): A list of vulnerabilities to check.
+        name (str): "Check Port Open" or "Check Port Closed"
+    """
+    expect_open = (name == "Check Port Open")
+
+    # Fetch and parse UFW rules once for all vulns in this call
+    try:
+        result = subprocess.run(
+            ["sudo", "ufw", "status", "numbered"],
+            capture_output=True, text=True, check=True
+        )
+        ufw_output = result.stdout
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Could not get UFW status: {e}")
+        for vuln in vulnerability:
+            if vuln != 1:
+                record_miss("Firewall Management")
+        return
+    except Exception as e:
+        print(f"Warning: Unexpected error getting UFW status: {e}")
+        for vuln in vulnerability:
+            if vuln != 1:
+                record_miss("Firewall Management")
+        return
+
+    ufw_active = "status: active" in ufw_output.lower()
+
+    # Parse every rule line into structured dicts.
+    # ufw status numbered output format (lower number = higher priority):
+    #   [ 1] 22/tcp              ALLOW IN    Anywhere
+    #   [ 2] 53                  ALLOW IN    Anywhere
+    #   [ 3] 443/tcp             DENY IN     10.0.0.5
+    #   [ 4] 22/tcp (v6)         ALLOW IN    Anywhere (v6)
+    parsed_rules = []
+    in_rules_section = False
+    for line in ufw_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Detect the header row
+        if (stripped.lower().startswith("to")
+                and "action" in stripped.lower()
+                and "from" in stripped.lower()):
+            in_rules_section = True
+            continue
+        if stripped.startswith("--"):
+            continue
+        if not in_rules_section:
+            continue
+
+        # Extract rule number and body from lines like "[ 1] 22/tcp  ALLOW IN  Anywhere"
+        num_match = re.match(r'^\[\s*(\d+)\]\s*(.*)', stripped)
+        if not num_match:
+            continue
+        rule_number = int(num_match.group(1))
+        rule_body   = num_match.group(2)
+
+        # Split into columns on runs of 2+ spaces
+        cols = re.split(r' {2,}', rule_body)
+        if len(cols) < 3:
+            continue
+
+        to_raw     = cols[0].strip()
+        action_raw = cols[1].strip().lower()
+        from_raw   = cols[2].strip().lower()
+
+        # Detect IPv6 rule BEFORE stripping the annotation
+        is_v6 = bool(re.search(r'\(v6\)', to_raw, re.IGNORECASE))
+
+        # Strip IPv6 "(v6)" annotations for port/proto parsing
+        to_raw   = re.sub(r'\s*\(v6\)\s*$', '', to_raw,   flags=re.IGNORECASE).strip()
+        from_raw = re.sub(r'\s*\(v6\)\s*$', '', from_raw, flags=re.IGNORECASE).strip()
+
+        # Determine action (ALLOW IN / DENY IN / REJECT IN …)
+        if "allow" in action_raw:
+            action = "allow"
+        elif "deny" in action_raw or "reject" in action_raw:
+            action = "deny"
+        else:
+            continue  # LIMIT and other actions are not scored
+
+        # Parse To field: "22/tcp", "53/udp", "80", "Anywhere" …
+        # Only port-targeted rules are relevant here.
+        port_match = re.match(r'^(\d+)(?:/(tcp|udp))?$', to_raw, re.IGNORECASE)
+        if not port_match:
+            continue  # Not a port rule (e.g. "Anywhere", service name, etc.)
+
+        rule_port  = int(port_match.group(1))
+        # proto "any" means the rule has no protocol qualifier → covers both tcp and udp
+        rule_proto = (port_match.group(2) or "any").lower()
+
+        parsed_rules.append({
+            'port':   rule_port,
+            'proto':  rule_proto,   # "tcp" | "udp" | "any"
+            'action': action,       # "allow" | "deny"
+            'from':   from_raw,     # already lowercased
+            'is_v6':  is_v6,        # True if rule applies to IPv6
+        })
+
+    # Score each configured vulnerability
+    for vuln in vulnerability:
+        if vuln != 1:
+            protocol     = vulnerability[vuln].get("Protocol", "TCP").strip().lower()
+            port_str     = vulnerability[vuln].get("Port", "")
+            config_ip    = vulnerability[vuln].get("IP", "").strip().lower()
+            program_name = vulnerability[vuln].get("Program Name", "")
+
+            if not port_str:
+                print(f"Warning: Missing port for {name}")
+                record_miss("Firewall Management")
+                continue
+
+            try:
+                port = int(port_str)
+            except (ValueError, TypeError):
+                print(f"Warning: Invalid port '{port_str}' for {name}")
+                record_miss("Firewall Management")
+                continue
+
+            # IP filtering: disabled for empty / wildcard addresses
+            ip_filter = config_ip not in ("", " ", "0.0.0.0", "::", "anywhere")
+
+            def first_applicable_rule(is_v6_target):
+                """
+                Return the first (lowest-numbered) UFW rule that matches
+                port + protocol + IP requirements for the given IP version.
+                Rules are already stored in priority order from ufw status numbered output.
+                """
+                for r in parsed_rules:  # already in priority order — no sort needed
+                    print("DEBUG: Evaluating rule:", r)
+                    print(f"DEBUG: Configuration - port={port}, protocol={protocol}, ip_filter={ip_filter}, config_ip={config_ip}, is_v6_target={is_v6_target}")
+                    if r['port'] != port:
+                        continue
+                    if r['is_v6'] != is_v6_target:
+                        continue
+                    # Protocol: rule proto 'any' covers both tcp and udp
+                    if r['proto'] != 'any' and r['proto'] != protocol:
+                        continue
+                    # From: must satisfy IP requirement
+                    if ip_filter:
+                        # Specific IP configured — accept rules targeting that IP or Anywhere
+                        if r['from'] not in ('anywhere', config_ip):
+                            continue
+                    else:
+                        # No IP configured — only "Anywhere" rules apply
+                        if r['from'] != 'anywhere':
+                            continue
+                    return r
+                return None
+
+            first_v4 = first_applicable_rule(False)
+            # Only check v6 when no specific IP is configured; a specific IP is
+            # always an IPv4 address so its UFW rule will never appear as a v6 rule.
+            first_v6 = None if ip_filter else first_applicable_rule(True)
+
+            has_v4_allow = first_v4 is not None and first_v4['action'] == 'allow'
+            has_v6_allow = first_v6 is not None and first_v6['action'] == 'allow'
+            has_allow    = has_v4_allow or has_v6_allow
+            has_v4_deny  = first_v4 is not None and first_v4['action'] == 'deny'
+            has_v6_deny  = first_v6 is not None and first_v6['action'] == 'deny'
+
+            display_name = program_name if program_name else f"Port {port}"
+            proto_label  = protocol.upper()
+
+            if expect_open:
+                # Port Open: need an explicit ALLOW rule
+                if has_allow:
+                    record_hit(
+                        f"{display_name} ({proto_label}/{port}) is allowed by UFW",
+                        vulnerability[vuln]["Points"],
+                    )
+                else:
+                    record_miss("Firewall Management")
+
+            else:
+                # Port Closed: all applicable sides must have no ALLOW rule.
+                # When an IP is specified only v4 is checked; otherwise both v4 and v6.
+                if not ufw_active:
+                    # UFW inactive — default deny is not in effect, can't confirm closed
+                    record_miss("Firewall Management")
+                elif has_v4_allow or has_v6_allow:
+                    # At least one checked side still has an ALLOW rule
+                    record_miss("Firewall Management")
+                else:
+                    if ip_filter:
+                        # IP-specific check: only v4 matters
+                        reason = "explicitly denied by UFW (IPv4)" if has_v4_deny else "not allowed (UFW default deny)"
+                    else:
+                        # No IP: both v4 and v6 checked
+                        if has_v4_deny and has_v6_deny:
+                            reason = "explicitly denied by UFW (IPv4 and IPv6)"
+                        elif has_v4_deny:
+                            reason = "explicitly denied by UFW (IPv4, IPv6 default deny)"
+                        elif has_v6_deny:
+                            reason = "explicitly denied by UFW (IPv6, IPv4 default deny)"
+                        else:
+                            reason = "not allowed (UFW default deny)"
+                    record_hit(
+                        f"{display_name} ({proto_label}/{port}) is closed — {reason}",
+                        vulnerability[vuln]["Points"],
+                    )
 
 
 def audit_check():
@@ -902,7 +1204,14 @@ def local_group_policy(vulnerability, name):
                         print(f"Error parsing deny: {e}")
     
     # Parse PAM data from common-auth to extract faillock settings
-    common_auth_dict = {}
+    # Track all three faillock modules separately: preauth, authfail, authsucc
+    common_auth_faillock_modules = {
+        'preauth': {},
+        'authfail': {},
+        'authsucc': {}
+    }
+    common_auth_dict = {}  # Keep for backward compatibility with other checks
+    
     for auth_line in common_auth_content:
         # Replace literal \t with actual tabs, then split by tabs and whitespace
         normalized_line = auth_line.replace('\\t', '\t')
@@ -919,12 +1228,24 @@ def local_group_policy(vulnerability, name):
             if len(parts) > 3 and 'pam_faillock.so' in module_path:
                 options = ' '.join(parts[3:])
                 
+                # Determine which faillock module this is
+                module_phase = None
+                if 'preauth' in options:
+                    module_phase = 'preauth'
+                elif 'authfail' in options:
+                    module_phase = 'authfail'
+                elif 'authsucc' in options:
+                    module_phase = 'authsucc'
+                
                 # Parse faillock-specific options ADD FUTURE CONFIGURATIONS HERE
                 if 'unlock_time=' in options:
                     try:
                         unlock_match = re.search(r'unlock_time=(\d+)', options)
                         if unlock_match:
-                            common_auth_dict['unlock_time'] = unlock_match.group(1)
+                            unlock_value = unlock_match.group(1)
+                            common_auth_dict['unlock_time'] = unlock_value
+                            if module_phase:
+                                common_auth_faillock_modules[module_phase]['unlock_time'] = unlock_value
                     except Exception as e:
                         print(f"Error parsing unlock_time from common-auth: {e}")
                         
@@ -932,7 +1253,10 @@ def local_group_policy(vulnerability, name):
                     try:
                         fail_interval_match = re.search(r'fail_interval=(\d+)', options)
                         if fail_interval_match:
-                            common_auth_dict['fail_interval'] = fail_interval_match.group(1)
+                            fail_interval_value = fail_interval_match.group(1)
+                            common_auth_dict['fail_interval'] = fail_interval_value
+                            if module_phase:
+                                common_auth_faillock_modules[module_phase]['fail_interval'] = fail_interval_value
                     except Exception as e:
                         print(f"Error parsing fail_interval from common-auth: {e}")
                         
@@ -940,7 +1264,10 @@ def local_group_policy(vulnerability, name):
                     try:
                         deny_match = re.search(r'deny=(\d+)', options)
                         if deny_match:
-                            common_auth_dict['deny'] = deny_match.group(1)
+                            deny_value = deny_match.group(1)
+                            common_auth_dict['deny'] = deny_value
+                            if module_phase:
+                                common_auth_faillock_modules[module_phase]['deny'] = deny_value
                     except Exception as e:
                         print(f"Error parsing deny from common-auth: {e}")
     
@@ -1075,38 +1402,37 @@ def local_group_policy(vulnerability, name):
                     return
                 
                 try:
-                    # Use faillock to verify lockout is working (Step 2)
-                    faillock_info = get_faillock_info("root")
+                    # First, attempt an active PAM enforcement test with pamtester
+                    pamtester_result = pamtester.test_max_login_tries_with_pamtester(expected_value)
+                    if pamtester_result is True:
+                        record_hit(
+                            f"Account lockout threshold is enforced after {expected_value} failed attempts.",
+                            vulnerability[1]["Points"],
+                        )
+                        return
+                    elif pamtester_result is False:
+                        record_miss("Local Policy")
+                        return
+
+                    # Priority 1: Check pam_faillock.so deny parameter in /etc/pam.d/common-auth
+                    deny_value = common_auth_dict.get("deny")
                     
-                    # Check common-auth first (preferred for faillock), then common-password PAM, then LOGIN_RETRIES
-                    deny_value = common_auth_dict.get("deny") or pam_settings_dict.get("deny")
+                    # Priority 2: Fall back to /etc/security/faillock.conf
+                    if not deny_value:
+                        deny_value = faillock_settings_content.get("deny")
+                    
                     if deny_value:
                         actual_value = int(deny_value)
                         if actual_value == expected_value:
-                            # Verify faillock is available to enforce this
-                            if faillock_info is not None:
-                                record_hit(
-                                    f"Account lockout threshold is set to {actual_value} failed attempts.", 
-                                    vulnerability[1]["Points"]
-                                )
-                            else:
-                                # Config is set but faillock not available
-                                record_hit(
-                                    f"Account lockout threshold is configured to {actual_value} failed attempts.", 
-                                    vulnerability[1]["Points"]
-                                )
-                        else:
-                            record_miss("Local Policy")
-                    else:
-                        # Fallback to LOGIN_RETRIES from login.defs
-                        actual_value = int(policy_settings_dict.get("LOGIN_RETRIES", 0))
-                        if actual_value == expected_value:
                             record_hit(
-                                f"Maximum login tries is set to {actual_value}.", 
+                                f"Account lockout threshold is set to {actual_value} failed attempts.", 
                                 vulnerability[1]["Points"]
                             )
                         else:
                             record_miss("Local Policy")
+                    else:
+                        # No deny configuration found in either location
+                        record_miss("Local Policy")
                 except (ValueError, TypeError, KeyError) as e:
                     print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
@@ -1117,25 +1443,28 @@ def local_group_policy(vulnerability, name):
                 
                 Linux Account Lockout Duration Configuration Methods (in priority order):
 
-                1. /etc/security/faillock.conf (PRIORITY - Centralized faillock config)
+                1. pam_faillock.so (HIGHEST PRIORITY - Modern PAM faillock module)
+                   Location: /etc/pam.d/common-auth or /etc/pam.d/system-auth
+                   Parameter: unlock_time=<seconds>
+                   Example: auth required pam_faillock.so preauth unlock_time=900
+                   Notes: Primary mechanism on modern systems (Ubuntu 20.04+, RHEL 8+)
+                          unlock_time=0 means permanent lockout (admin must unlock)
+                          Works in conjunction with deny= and fail_interval=
+                          Must be set consistently across all three modules (preauth, authfail, authsucc)
+
+                2. /etc/security/faillock.conf (Fallback - Centralized faillock config)
                    Location: /etc/security/faillock.conf
                    Parameter: unlock_time = <seconds>
                    Example: unlock_time = 900
                    Notes: Centralized configuration file for pam_faillock
-                          Takes precedence over inline PAM parameters if present
+                          Only checked if not set in common-auth modules
                           Introduced in newer versions of pam_faillock
-
-                2. pam_faillock.so (Modern PAM faillock module)
-                   Location: /etc/pam.d/common-auth or /etc/pam.d/system-auth
-                   Parameter: unlock_time=<seconds>
-                   Example: auth required pam_faillock.so unlock_time=900
-                   Notes: Primary mechanism on modern systems (Ubuntu 20.04+, RHEL 8+)
-                          unlock_time=0 means permanent lockout (admin must unlock)
-                          Works in conjunction with deny= and fail_interval=
                 
                 Current Implementation Priority:
-                - Checks pam_faillock.so unlock_time from /etc/pam.d/common-auth (common_auth_dict)
-                - Falls back to configuration in /etc/security/faillock.conf (faillock_settings_content)
+                - First checks if all 3 pam_faillock.so modules (preauth, authfail, authsucc) exist
+                  in /etc/pam.d/common-auth with consistent unlock_time parameters
+                - Falls back to /etc/security/faillock.conf only if parameter not in all 3 modules
+                - Records miss if parameter values are inconsistent across modules
                 """
                 # Get the expected value from configuration
                 try:
@@ -1150,22 +1479,47 @@ def local_group_policy(vulnerability, name):
                     return
                 
                 try:
-                    # Priority 0: Check /etc/security/faillock.conf (highest priority - centralized config)
-                    # Priority 1: Check pam_faillock.so unlock_time from common-auth
-                    unlock_time = (common_auth_dict.get("unlock_time") or 
-                                   faillock_settings_content.get("unlock_time"))
-                    if unlock_time:
-                        actual_value = int(unlock_time)
-                        if actual_value == expected_value:
-                            record_hit(
-                                f"Account lockout duration (unlock_time) is set to {actual_value} seconds.", 
-                                vulnerability[1]["Points"]
-                            )
+                    # Priority 1: Check if all three faillock modules have unlock_time parameter
+                    preauth_unlock = common_auth_faillock_modules['preauth'].get('unlock_time')
+                    authfail_unlock = common_auth_faillock_modules['authfail'].get('unlock_time')
+                    authsucc_unlock = common_auth_faillock_modules['authsucc'].get('unlock_time')
+                    
+                    # Check if all three modules have the parameter
+                    all_modules_have_param = (preauth_unlock is not None and 
+                                             authfail_unlock is not None and 
+                                             authsucc_unlock is not None)
+                    
+                    if all_modules_have_param:
+                        # All three modules have the parameter - verify they're consistent
+                        if preauth_unlock == authfail_unlock == authsucc_unlock:
+                            # All three match - check if it's the expected value
+                            actual_value = int(preauth_unlock)
+                            if actual_value == expected_value:
+                                record_hit(
+                                    f"Account lockout duration (unlock_time) is set to {actual_value} seconds across all faillock modules.", 
+                                    vulnerability[1]["Points"]
+                                )
+                            else:
+                                record_miss("Local Policy")
                         else:
+                            # Values are inconsistent across modules
+                            print(f"Warning: unlock_time values are inconsistent across faillock modules: preauth={preauth_unlock}, authfail={authfail_unlock}, authsucc={authsucc_unlock}")
                             record_miss("Local Policy")
                     else:
-                        # No unlock_time found in any configuration
-                        record_miss("Local Policy")
+                        # Not all modules have the parameter - fall back to faillock.conf
+                        unlock_time = faillock_settings_content.get("unlock_time")
+                        if unlock_time:
+                            actual_value = int(unlock_time)
+                            if actual_value == expected_value:
+                                record_hit(
+                                    f"Account lockout duration (unlock_time) is set to {actual_value} seconds in faillock.conf.", 
+                                    vulnerability[1]["Points"]
+                                )
+                            else:
+                                record_miss("Local Policy")
+                        else:
+                            # No unlock_time found in any configuration
+                            record_miss("Local Policy")
                 except (ValueError, TypeError, KeyError) as e:
                     print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
@@ -1180,23 +1534,26 @@ def local_group_policy(vulnerability, name):
                 1. pam_faillock.so (HIGHEST PRIORITY - Modern PAM faillock module)
                    Location: /etc/pam.d/common-auth or /etc/pam.d/system-auth
                    Parameter: fail_interval=<seconds>
-                   Example: auth required pam_faillock.so fail_interval=900
+                   Example: auth required pam_faillock.so preauth fail_interval=900
                    Notes: Primary mechanism on modern systems (Ubuntu 20.04+, RHEL 8+)
                           Defines the time window for counting failed attempts
                           After this interval, the failure count resets to 0
                           Works with deny= to determine when lockout occurs
+                          Must be set consistently across all three modules (preauth, authfail, authsucc)
                 
-                2. /etc/security/faillock.conf (HIGH PRIORITY - Centralized faillock config)
+                2. /etc/security/faillock.conf (Fallback - Centralized faillock config)
                    Location: /etc/security/faillock.conf
                    Parameter: fail_interval = <seconds>
                    Example: fail_interval = 900
                    Notes: Centralized configuration file for pam_faillock
-                          Takes precedence over inline PAM parameters if present
+                          Only checked if not set in common-auth modules
                           Introduced in newer versions of pam_faillock
                 
                 Current Implementation Priority:
-                - Checks fail_interval from /etc/pam.d/common-auth (common_auth_dict)
-                - Falls back to /etc/security/faillock.conf (faillock_settings_content)
+                - First checks if all 3 pam_faillock.so modules (preauth, authfail, authsucc) exist
+                  in /etc/pam.d/common-auth with consistent fail_interval parameters
+                - Falls back to /etc/security/faillock.conf only if parameter not in all 3 modules
+                - Records miss if parameter values are inconsistent across modules
                 """
                 # Get the expected value from configuration
                 try:
@@ -1211,24 +1568,47 @@ def local_group_policy(vulnerability, name):
                     return
                 
                 try:
-                    # Priority 0: Check /etc/security/faillock.conf (highest priority - centralized config)
-                    # Priority 1: Check pam_faillock.so fail_interval from common-auth
-                    # Priority 2: Check fail_interval from common-password PAM settings
-                    # Note: pwquality.conf does not contain fail_interval, so no fallback there
-                    fail_interval = (common_auth_dict.get("fail_interval")  or faillock_settings_content.get("fail_interval"))
+                    # Priority 1: Check if all three faillock modules have fail_interval parameter
+                    preauth_interval = common_auth_faillock_modules['preauth'].get('fail_interval')
+                    authfail_interval = common_auth_faillock_modules['authfail'].get('fail_interval')
+                    authsucc_interval = common_auth_faillock_modules['authsucc'].get('fail_interval')
                     
-                    if fail_interval:
-                        actual_value = int(fail_interval)
-                        if actual_value == expected_value:
-                            record_hit(
-                                f"Account lockout observation window (fail_interval) is set to {actual_value} seconds.", 
-                                vulnerability[1]["Points"]
-                            )
+                    # Check if all three modules have the parameter
+                    all_modules_have_param = (preauth_interval is not None and 
+                                             authfail_interval is not None and 
+                                             authsucc_interval is not None)
+                    
+                    if all_modules_have_param:
+                        # All three modules have the parameter - verify they're consistent
+                        if preauth_interval == authfail_interval == authsucc_interval:
+                            # All three match - check if it's the expected value
+                            actual_value = int(preauth_interval)
+                            if actual_value == expected_value:
+                                record_hit(
+                                    f"Account lockout observation window (fail_interval) is set to {actual_value} seconds across all faillock modules.", 
+                                    vulnerability[1]["Points"]
+                                )
+                            else:
+                                record_miss("Local Policy")
                         else:
+                            # Values are inconsistent across modules
+                            print(f"Warning: fail_interval values are inconsistent across faillock modules: preauth={preauth_interval}, authfail={authfail_interval}, authsucc={authsucc_interval}")
                             record_miss("Local Policy")
                     else:
-                        # No fail_interval found in any configuration
-                        record_miss("Local Policy")
+                        # Not all modules have the parameter - fall back to faillock.conf
+                        fail_interval = faillock_settings_content.get("fail_interval")
+                        if fail_interval:
+                            actual_value = int(fail_interval)
+                            if actual_value == expected_value:
+                                record_hit(
+                                    f"Account lockout observation window (fail_interval) is set to {actual_value} seconds in faillock.conf.", 
+                                    vulnerability[1]["Points"]
+                                )
+                            else:
+                                record_miss("Local Policy")
+                        else:
+                            # No fail_interval found in any configuration
+                            record_miss("Local Policy")
                 except (ValueError, TypeError, KeyError) as e:
                     print(f"Error checking {name}: {e}")
                     record_miss("Local Policy")
@@ -1455,7 +1835,7 @@ def get_precise_password_change_time(username):
     CRITICAL: PAM may log "password changed" even when the change was rejected by pwquality.
     This function cross-references the timestamp with the actual password hash to verify
     the password was truly changed. Uses the timestamp from auth.log but relies on the
-    calling function to validate the hash actually changed.
+    calling function to validate the hash actually changed to confirm validity.
     
     Args:
         username (str): The username to search for.
@@ -1473,9 +1853,7 @@ def get_precise_password_change_time(username):
             
             # Search backwards (most recent first)
             for line in reversed(lines):
-                if f"password changed for {username}" in line:
-                    print(f"DEBUG: Found password change log line: {line.strip()}")
-                    
+                if f"password changed for {username}" in line:                    
                     # Parse timestamp - try ISO 8601 format first (systemd journal format)
                     # Format: 2026-01-07T12:54:31.696514-08:00 hostname ...
                     parts = line.split()
@@ -1502,8 +1880,7 @@ def get_precise_password_change_time(username):
                                 else:
                                     # No microseconds
                                     dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S")
-                                
-                                print(f"DEBUG: Successfully parsed ISO timestamp: {dt}")
+                        
                                 return dt
                         except ValueError as e:
                             print(f"DEBUG: Could not parse as ISO format: {e}")
@@ -1519,7 +1896,6 @@ def get_precise_password_change_time(username):
                                 timestamp_str = f"{month} {day} {current_year} {time_str}"
                                 
                                 dt = datetime.datetime.strptime(timestamp_str, "%b %d %Y %H:%M:%S")
-                                print(f"DEBUG: Successfully parsed syslog timestamp: {dt}")
                                 return dt
                         except ValueError as e:
                             print(f"DEBUG: Could not parse as syslog format: {e}")
@@ -1745,11 +2121,19 @@ def update_check_period(vulnerability):
     """
 
     # --- determine user to run gsettings as ---
-    user = (
-        os.environ.get("SUDO_USER")
-        or os.environ.get("USER")
-        or os.getlogin()
-    )
+    user = os.environ.get("SUDO_USER")
+    if not user:
+        user = os.environ.get("USER")
+    if not user:
+        try:
+            user = os.getlogin()
+        except OSError:
+            user = None
+    
+    if not user:
+        print("ERROR: Could not determine user for gsettings command")
+        record_miss("Program Management")
+        return
 
     # --- run gsettings ---
     try:
@@ -1852,101 +2236,225 @@ def remove_text_from_file(vulnerability):
                 continue
 
 
+def _is_valid_autostart_file(path):
+    """
+    Validate a .desktop file for autostart purposes.
+
+    A file is considered valid if it has:
+    - A [Desktop Entry] section
+    - Name, Exec, and Type keys (case-sensitive key names)
+    - Type=Application (whitespace-insensitive, case-insensitive)
+    - A resolvable Exec binary (first token after stripping field codes like %f/%u)
+
+    Args:
+        path (Path or str): Path to the .desktop file.
+
+    Returns:
+        tuple: (is_valid: bool, is_hidden: bool)
+            is_valid  - True if the file meets all validity criteria.
+            is_hidden - True if Hidden=true (whitespace-insensitive, lowercase 'true').
+    """
+    try:
+        parser = configparser.RawConfigParser()
+        parser.optionxform = str  # Preserve key case (e.g. "Exec" not "exec")
+        parser.read(str(path))
+
+        if not parser.has_section('Desktop Entry'):
+            return False, False
+
+        section = parser['Desktop Entry']
+
+        # Check required keys exist (case-sensitive)
+        for key in ('Name', 'Exec', 'Type'):
+            if key not in section:
+                return False, False
+
+        # Type must be "Application" (whitespace-insensitive, case-insensitive)
+        if section['Type'].strip().lower() != 'application':
+            return False, False
+
+        # Exec: extract first token, strip XDG field codes (%f, %F, %u, %U, etc.)
+        exec_value = section['Exec'].strip()
+        exec_cmd = re.split(r'\s+', exec_value)[0]
+        exec_cmd = re.sub(r'%[a-zA-Z]', '', exec_cmd).strip()
+        if not exec_cmd:
+            return False, False
+        # Must be an existing absolute path or findable in PATH
+        if not (os.path.isfile(exec_cmd) or shutil.which(exec_cmd) is not None):
+            return False, False
+
+        # Hidden=true check (whitespace-insensitive, must be lowercase 'true')
+        is_hidden = False
+        if 'Hidden' in section:
+            is_hidden = section['Hidden'].strip() == 'true'
+
+        return True, is_hidden
+
+    except (configparser.Error, IOError, PermissionError, OSError):
+        return False, False
+
+
 def start_up_apps(vulnerability):
     """
     Checks if specific applications are disabled from running at startup.
-    
-    Logic:
-    - If app exists in /etc/xdg/autostart/ (global):
-      * Hit: Corresponding .desktop file exists in ~/.config/autostart/ with Hidden=true
-      * Miss: Otherwise
-    - If app doesn't exist in global directory:
-      * Hit: .desktop file exists in ~/.config/autostart/ with Hidden=true
-      * Miss: File doesn't exist, or Hidden=false, or no Hidden line
-    
+
+    Determines user home directory properly when running under sudo by checking
+    the SUDO_USER environment variable to get the actual user (not root).
+    Falls back to Path.home() if not running under sudo.
+
+    Uses XDG base directories (via pyxdg) to find system-wide autostart folders.
+
+    Validation criteria for a .desktop file:
+    - Has a [Desktop Entry] section
+    - Has Name, Exec, and Type keys
+    - Type=Application (whitespace/case-insensitive)
+    - Exec binary is resolvable (exists on filesystem or in PATH)
+
+    Scoring logic (checked in order):
+    1. User autostart file (~/.config/autostart/<program>.desktop):
+       - If valid: hit if Hidden=true (whitespace-insensitive), miss otherwise
+    2. Global autostart file(s) (from XDG config dirs, e.g. /etc/xdg/autostart):
+       - If valid: hit if Hidden=true (whitespace-insensitive), miss otherwise
+    3. Neither file is valid (doesn't exist or fails validation):
+       - Record a hit (program is not configured to autostart anywhere)
+
+    Note: Hidden value matching is whitespace-insensitive and case-sensitive
+          (must be lowercase 'true'). Hidden=TRUE will NOT score a hit.
+
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
-    global_autostart_dir = Path("/etc/xdg/autostart")
-    
+    # Get system-wide autostart directories via XDG (excludes user config home)
+    global_autostart_dirs = [
+        Path(d) / "autostart"
+        for d in xdg_base.xdg_config_dirs
+        if d != xdg_base.xdg_config_home
+    ]
+
     # Get the actual user's home directory (not root's when running with sudo)
     sudo_user = os.environ.get('SUDO_USER')
     if sudo_user:
         user_home = Path(f"/home/{sudo_user}")
     else:
         user_home = Path.home()
-    
+
     user_autostart_dir = user_home / ".config/autostart"
-    
+
     for vuln in vulnerability:
         if vuln != 1:
             program_to_check = vulnerability[vuln].get("Program Name", "")
             if not program_to_check:
                 continue
-            
+
             # Ensure .desktop extension
-            desktop_filename = program_to_check if program_to_check.endswith(".desktop") else f"{program_to_check}.desktop"
-            
-            global_desktop_path = global_autostart_dir / desktop_filename
+            desktop_filename = (
+                program_to_check
+                if program_to_check.endswith(".desktop")
+                else f"{program_to_check}.desktop"
+            )
+
             user_desktop_path = user_autostart_dir / desktop_filename
-            is_disabled = False
-            
-            # Check if app exists in global directory
-            if global_desktop_path.exists():
-                # App exists globally - must have Hidden=true in user config
-                if user_desktop_path.exists():
-                    # Read file directly to enforce exact format: "[Desktop Entry]" and "Hidden=true"
-                    # No spaces, exact capitalization required
-                    try:
-                        with open(user_desktop_path, 'r') as f:
-                            content = f.read()
-                            # Check for exact strings "[Desktop Entry]" and "Hidden=true"
-                            is_disabled = "[Desktop Entry]" in content and "Hidden=true" in content
-                    except (IOError, PermissionError):
-                        is_disabled = False
+
+            # Step 1: Check user autostart file — if valid, score on Hidden
+            if user_desktop_path.exists():
+                is_valid, is_hidden = _is_valid_autostart_file(user_desktop_path)
+                if is_valid:
+                    if is_hidden:
+                        record_hit(
+                            f"{program_to_check} has been disabled from startup",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("File Management")
+                    continue
+
+            # Step 2: Check global autostart file(s) — if valid, score on Hidden
+            global_valid = False
+            global_hidden = False
+            for global_autostart_dir in global_autostart_dirs:
+                global_desktop_path = global_autostart_dir / desktop_filename
+                if global_desktop_path.exists():
+                    gv, gh = _is_valid_autostart_file(global_desktop_path)
+                    if gv:
+                        global_valid, global_hidden = True, gh
+                        break
+
+            if global_valid:
+                if global_hidden:
+                    record_hit(
+                        f"{program_to_check} has been disabled from startup",
+                        vulnerability[vuln]["Points"],
+                    )
                 else:
-                    is_disabled = False
-            else:
-                # App doesn't exist in global directory - check user directory
-                if user_desktop_path.exists():
-                    # Read file directly to enforce exact format: "[Desktop Entry]" and "Hidden=true"
-                    # No spaces, exact capitalization required
-                    try:
-                        with open(user_desktop_path, 'r') as f:
-                            content = f.read()
-                            # Check for exact strings "[Desktop Entry]" and "Hidden=true"
-                            is_disabled = "[Desktop Entry]" in content and "Hidden=true" in content
-                    except (IOError, PermissionError):
-                        is_disabled = False
-                else:
-                    is_disabled = False
-            
-            # Record hit or miss
-            if is_disabled:
-                record_hit(
-                    f"{program_to_check} has been disabled from startup",
-                    vulnerability[vuln]["Points"],
-                )
-            else:
-                record_miss("File Management")
+                    record_miss("File Management")
+                continue
+
+            # Step 3: No valid autostart entry found — program is not configured to autostart
+            record_hit(
+                f"{program_to_check} is not configured to autostart",
+                vulnerability[vuln]["Points"],
+            )
 
 
 def check_hosts(vulnerability):
     """
     Checks the /etc/hosts file and records hits/misses based on its content.
+    Ignores standard default entries that are part of a normal hosts file.
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
     hosts_file_path = "/etc/hosts"
-    with open(hosts_file_path, "r") as file:
-        hosts_content = file.read().strip()
-    for vuln in vulnerability:
-        if vuln != 1:
-            if not hosts_content:
-                record_hit("Hosts file has been cleared", vulnerability[vuln]["Points"])
-            else:
-                record_miss("File Management")
+    
+    # Define standard default patterns that should be ignored
+    # These are the default entries in a typical Linux mint hosts file
+    # TODO: Might need updating for other distributions
+    default_patterns = [
+        r'^\s*127\.0\.0\.1\s+\S+(\s+\S+)*\s*$',
+        r'^\s*127\.0\.1\.1\s+\S+(\s+\S+)*\s*$',
+        r'^\s*::1\s+\S+(\s+\S+)*\s*$',
+        r'^\s*fe00::0\s+\S+(\s+\S+)*\s*$',
+        r'^\s*ff00::0\s+\S+(\s+\S+)*\s*$',
+        r'^\s*ff02::1\s+\S+(\s+\S+)*\s*$',
+        r'^\s*ff02::2\s+\S+(\s+\S+)*\s*$',
+    ]
+    try:
+        with open(hosts_file_path, "r") as file:
+            lines = file.readlines()
+        
+        # Filter out empty lines, comments, and default entries
+        non_default_lines = []
+        for line in lines:
+            stripped_line = line.strip()
+            
+            # Skip empty lines and comment-only lines
+            if not stripped_line or stripped_line.startswith('#'):
+                continue
+            
+            # Check if this line matches any default pattern
+            is_default = False
+            for pattern in default_patterns:
+                if re.match(pattern, stripped_line, re.IGNORECASE):
+                    is_default = True
+                    break
+            
+            # If it doesn't match any default pattern, it's a non-default entry
+            if not is_default:
+                non_default_lines.append(stripped_line)
+        
+        # Score based on whether there are any non-default entries
+        if not non_default_lines:
+            record_hit("Hosts file has been cleared", vulnerability[1]["Points"])
+        else:
+            record_miss("File Management")
+    
+    except (IOError, PermissionError) as e:
+        print(f"ERROR: Could not read {hosts_file_path}: {e}")
+        record_miss("File Management")
+        
+    except Exception as e:
+        print(f"ERROR: An unexpected error occurred while checking hosts file: {e}")
+        record_miss("File Management")
 
 
 # fix
@@ -1963,7 +2471,6 @@ def critical_services(vulnerability):
             service_name = vulnerability[vuln]["Service Name"]
             expected_state = vulnerability[vuln]["Service State"]
             expected_start_mode = vulnerability[vuln]["Service Start Mode"]
-            print("DEBUG: found service to check:", service_name, expected_state, expected_start_mode)
             # Ensure service name has .service extension
             if not service_name.endswith(".service"):
                 service_name_full = service_name + ".service"
@@ -1975,7 +2482,6 @@ def critical_services(vulnerability):
                 # Check for exact match of base names
                 if service_name_full == service["unit"]:
                     actual_state = service["active"]
-                    print("DEBUG: actual state for", service["unit"], "is", actual_state)
                     # Get the service start mode
                     try:
                         result = subprocess.run(
@@ -2080,29 +2586,104 @@ def manage_services(vulnerability):
                 print(f"ERROR: Could not check service {service_name}: {e}")
                 record_miss("Program Management")
 
+def check_ssh_permit_root_login():
+    """
+    Helper function to check SSH PermitRootLogin configuration.
+    Uses global ssh_config_cache to avoid re-parsing when file hasn't changed.
+    
+    Returns:
+        dict: {
+            'permit_root_login_found': bool,
+            'permit_root_login_value': str or None,
+            'ssh_config_exists': bool
+        }
+    """
+    global ssh_config_cache, _ssh_config_cache_valid
+    
+    # If cache is valid, return cached result
+    if _ssh_config_cache_valid and ssh_config_cache['populated']:
+        return {
+            'permit_root_login_found': ssh_config_cache['permit_root_login'] == 'found',
+            'permit_root_login_value': ssh_config_cache['permit_root_login_value'],
+            'ssh_config_exists': ssh_config_cache['permit_root_login'] is not None
+        }
+    
+    # Cache miss or invalidated - re-read the file
+    result = {
+        'permit_root_login_found': False,
+        'permit_root_login_value': None,
+        'ssh_config_exists': True
+    }
+    
+    try:
+        with open("/etc/ssh/sshd_config", "r") as ssh_config_file:
+            for line in ssh_config_file:
+                stripped_line = line.strip()
+                
+                # Skip empty lines and comments
+                if not stripped_line or stripped_line.startswith("#"):
+                    continue
+                
+                # Check for PermitRootLogin directive (case-insensitive)
+                if stripped_line.lower().startswith("permitrootlogin"):
+                    result['permit_root_login_found'] = True
+                    parts = stripped_line.split()
+                    if len(parts) >= 2:
+                        result['permit_root_login_value'] = parts[1].lower()
+                    break  # Found the active directive, stop searching
+        
+        # Update cache
+        ssh_config_cache['permit_root_login'] = 'found' if result['permit_root_login_found'] else 'not_found'
+        ssh_config_cache['permit_root_login_value'] = result['permit_root_login_value']
+        ssh_config_cache['populated'] = True
+        
+    except FileNotFoundError:
+        result['ssh_config_exists'] = False
+        # Update cache
+        ssh_config_cache['permit_root_login'] = None
+        ssh_config_cache['permit_root_login_value'] = None
+        ssh_config_cache['populated'] = True
+    
+    return result
+
+
 def disable_SSH_Root_Login(vulnerability):
     """
     Checks if SSH root login is disabled and records hits/misses.
+    Uses check_ssh_permit_root_login() helper which caches results via inotify.
+    
+    By default, SSH has PermitRootLogin disabled (or set to "prohibit-password").
+    Award points if:
+    - PermitRootLogin is explicitly set to "no" or "without-password" or "prohibit-password"
+    - PermitRootLogin is commented out (default behavior = disabled)
+    - PermitRootLogin line doesn't exist (default behavior = disabled)
+    - SSH config file doesn't exist (SSH not installed)
     
     Args:
         vulnerability (list): A list of vulnerabilities to check.
     """
-    try:
-        with open("/etc/ssh/sshd_config", "r") as ssh_config_file:
-            for line in ssh_config_file:
-                if line.strip().startswith("PermitRootLogin"):
-                    value = line.strip().split()[1].lower()
-                    if value in ("no", "without-password"):
-                        record_hit(
-                            "SSH_Root_Login Disabled.", vulnerability[1]["Points"]
-                        )
-                    else:
-                        record_miss("Local Policy")
+    ssh_config = check_ssh_permit_root_login()
+    
+    if not ssh_config['ssh_config_exists']:
+        # SSH config doesn't exist - SSH likely not installed (secure)
+        record_hit("SSH Root Login Disabled (SSH not configured).", vulnerability[1]["Points"])
+        return
+    
+    if not ssh_config['permit_root_login_found']:
+        # Not found = commented out or doesn't exist = secure default
+        record_hit(
+            "SSH Root Login Disabled (default or commented out).", 
+            vulnerability[1]["Points"]
+        )
+    elif ssh_config['permit_root_login_value'] in ("no", "without-password", "prohibit-password"):
+        record_hit(
+            f"SSH Root Login Disabled (PermitRootLogin {ssh_config['permit_root_login_value']}).", 
+            vulnerability[1]["Points"]
+        )
+    else:
+        # PermitRootLogin is explicitly set to something insecure (e.g., "yes")
+        record_miss("Local Policy")
 
-    except FileNotFoundError:
-        record_hit("SSH_Root_Login Disabled.", vulnerability[1]["Points"])
-
-    record_miss("Local Policy")
 
 def is_kernel_running(expected_version, running_kernel):
     """
@@ -2144,7 +2725,7 @@ def check_kernel(vulnerability):
     try:
         # Step 1: Get the currently running kernel
         running_kernel = platform.uname().release
-        print(f"Running kernel: {running_kernel}")
+        # print(f"Running kernel: {running_kernel}")
         
         # Step 1.5: Detect Ubuntu base version (important for derivatives like Mint)
         ubuntu_version = None
@@ -2176,13 +2757,13 @@ def check_kernel(vulnerability):
             }
             
             # Prefer UBUNTU_CODENAME mapping, fallback to VERSION_ID
-            if ubuntu_codename and ubuntu_codename in codename_to_version:
-                ubuntu_version = codename_to_version[ubuntu_codename]
-                print(f"Detected Ubuntu base: {ubuntu_version} (codename: {ubuntu_codename})")
-            elif ubuntu_version:
-                print(f"Detected Ubuntu version: {ubuntu_version}")
-            else:
-                print("Warning: Could not determine Ubuntu version")
+            # if ubuntu_codename and ubuntu_codename in codename_to_version:
+            #     ubuntu_version = codename_to_version[ubuntu_codename]
+            #     print(f"Detected Ubuntu base: {ubuntu_version} (codename: {ubuntu_codename})")
+            # elif ubuntu_version:
+            #     print(f"Detected Ubuntu version: {ubuntu_version}")
+            # else:
+            #     print("Warning: Could not determine Ubuntu version")
                 
         except FileNotFoundError:
             print("Warning: Could not detect Ubuntu version from /etc/os-release")
@@ -2224,13 +2805,13 @@ def check_kernel(vulnerability):
         # Determine which meta-package to query
         if uses_hwe:
             meta_package = hwe_package_name
-            print(f"System uses HWE kernel track: {meta_package}")
+            # print(f"System uses HWE kernel track: {meta_package}")
         else:
             meta_package = "linux-image-generic"
-            print("System uses standard kernel track")
+            # print("System uses standard kernel track")
         
         # Step 3: Query apt cache for latest available kernel version
-        print(f"Querying repositories for latest {meta_package} version...")
+        # print(f"Querying repositories for latest {meta_package} version...")
         apt_result = subprocess.run(
             ["apt-cache", "policy", meta_package],
             capture_output=True,
@@ -2246,12 +2827,12 @@ def check_kernel(vulnerability):
                 break
         
         if not latest_available_version or latest_available_version == "(none)":
-            print("ERROR: Could not determine latest available kernel version")
-            print("Ensure internet connection is available and 'sudo apt update' has been run")
+            # print("ERROR: Could not determine latest available kernel version")
+            # print("Ensure internet connection is available and 'sudo apt update' has been run")
             record_miss("Local Policy")
             return
         
-        print(f"Latest available kernel meta-package version: {latest_available_version}")
+        # print(f"Latest available kernel meta-package version: {latest_available_version}")
         
         # Step 4: Determine the actual kernel image package version from the meta-package
         depends_result = subprocess.run(
@@ -2277,7 +2858,7 @@ def check_kernel(vulnerability):
         
         # Extract version from package name
         latest_kernel_version = latest_kernel_image.replace("linux-image-", "").replace("-generic", "")
-        print(f"Latest available kernel version: {latest_kernel_version}")
+        # print(f"Latest available kernel version: {latest_kernel_version}")
         
         # Step 5: Check if the latest kernel package is installed
         installed_check = subprocess.run(
@@ -2294,8 +2875,8 @@ def check_kernel(vulnerability):
                     break
         
         if not is_installed:
-            print(f"Latest kernel {latest_kernel_image} is NOT installed")
-            print(f"Run 'sudo apt update && sudo apt upgrade' to install")
+            # print(f"Latest kernel {latest_kernel_image} is NOT installed")
+            # print(f"Run 'sudo apt update && sudo apt upgrade' to install")
             record_miss("Local Policy")
             return
         
@@ -2303,14 +2884,14 @@ def check_kernel(vulnerability):
         
         # Step 6: Check if the installed latest kernel is actually running
         if not is_kernel_running(latest_kernel_version, running_kernel):
-            print(f"Latest kernel {latest_kernel_version} is installed but NOT running")
-            print(f"Currently running: {running_kernel}")
-            print("Reboot required to load the new kernel")
+            # print(f"Latest kernel {latest_kernel_version} is installed but NOT running")
+            # print(f"Currently running: {running_kernel}")
+            # print("Reboot required to load the new kernel")
             record_miss("Local Policy")
             return
         
         # Step 7: Success - latest kernel is both installed and running
-        print(f"✓ Kernel updated to latest version and running: {running_kernel}")
+        # print(f"✓ Kernel updated to latest version and running: {running_kernel}")
         record_hit(
             f"Kernel updated to latest version ({running_kernel})",
             vulnerability[1]["Points"]
@@ -2518,8 +3099,6 @@ def permission_checks(vulnerability):
                 
                 # Get the actual permission this user has on the file
                 actual_perm = get_user_permission_on_file(username, file_path)
-                print("DEBUG: Checking permissions for user", username, "on", file_path)
-                print("DEBUG: Expected permission:", expected_perm, "Actual permission:", actual_perm)
                 if actual_perm is None:
                     # Error getting permissions (file doesn't exist, user doesn't exist, etc.)
                     print(f"Warning: Could not check permissions for user '{username}' on '{file_path}'")
@@ -2547,14 +3126,7 @@ def no_scoring_available(name):
     Args:
         name (str): The name of the item with no scoring definition.
     """
-    messagebox.showerror(
-        ("No scoring for:", name),
-        (
-            "There is no scoring definition for",
-            name,
-            ". Please remove this option if you are the image creator, if you are a competitor ignore this message.",
-        ),
-    )
+    print(f"ERROR: No scoring definition for '{name}'. Please remove this option if you are the image creator, if you are a competitor ignore this message.")
 
 
 def load_policy_settings():
@@ -2746,50 +3318,6 @@ def get_chage_info():
             pass
         
         print(f"Warning: Could not get chage info using test user: {e}")
-        return {}
-
-
-def get_faillock_info(username="root"):
-    """
-    Gets account lockout information using faillock command.
-    This shows the actual effective lockout settings.
-    
-    Args:
-        username (str): The username to check. Defaults to "root".
-    
-    Returns:
-        dict: Dictionary containing faillock information, or empty dict on error.
-    """
-    try:
-        result = subprocess.run(
-            ["faillock", "--user", username],
-            capture_output=True,
-            text=True,
-            check=False  # Don't raise on non-zero exit (user might not exist)
-        )
-        
-        faillock_info = {
-            "failed_attempts": 0,
-            "locked": False
-        }
-        
-        # Parse the output for failed attempts
-        for line in result.stdout.splitlines():
-            if "failures:" in line.lower():
-                try:
-                    # Extract number from line like "When                Type  Source                                           Valid"
-                    # or actual failure count
-                    parts = line.split()
-                    for i, part in enumerate(parts):
-                        if part.isdigit():
-                            faillock_info["failed_attempts"] = int(part)
-                            break
-                except (ValueError, IndexError):
-                    pass
-                    
-        return faillock_info
-    except FileNotFoundError:
-        print("Warning: faillock command not found. Install libpam-modules for lockout checking.")
         return {}
 
 
@@ -3215,6 +3743,102 @@ def check_version_changes(inotify_watcher):
     return False
 
 
+def setup_policy_inotify():
+    """
+    Sets up inotify watchers for PAM and security policy configuration paths.
+
+    Watches:
+      - /etc/pam.d/       — covers common-password, common-auth, etc.
+      - /etc/security/    — covers faillock.conf, pwquality.conf, etc.
+      - /etc/login.defs   — password-aging settings (min/max days)
+
+    Returns:
+        INotify: An inotify instance watching all policy-related paths.
+    """
+    inotify = INotify()
+    dir_flags  = flags.MODIFY | flags.CLOSE_WRITE | flags.CREATE | flags.DELETE | flags.MOVED_TO | flags.MOVED_FROM
+    file_flags = flags.MODIFY | flags.CLOSE_WRITE
+
+    for path in ("/etc/pam.d", "/etc/security"):
+        if os.path.exists(path):
+            try:
+                inotify.add_watch(path, dir_flags)
+            except Exception as e:
+                print(f"WARNING: Could not watch {path}: {e}")
+
+    if os.path.exists("/etc/login.defs"):
+        try:
+            inotify.add_watch("/etc/login.defs", file_flags)
+        except Exception as e:
+            print(f"WARNING: Could not watch /etc/login.defs: {e}")
+
+    return inotify
+
+
+def check_policy_changes(inotify_watcher):
+    """
+    Non-blocking check for PAM / security policy file changes.
+
+    Args:
+        inotify_watcher (INotify): The inotify instance watching policy paths.
+
+    Returns:
+        bool: True if any changes were detected, False otherwise.
+    """
+    try:
+        events = inotify_watcher.read(timeout=0, read_delay=0)
+        if events:
+            changed = {e.name for e in events if e.name}
+            label = ", ".join(sorted(changed)) if changed else "unknown file"
+            print(f"INFO: Policy file change detected ({label}) — re-running local policy checks")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def setup_ssh_config_inotify():
+    """
+    Sets up inotify watcher for SSH configuration file.
+
+    Watches:
+      - /etc/ssh/sshd_config — SSH server configuration
+
+    Returns:
+        INotify: An inotify instance watching SSH config file.
+    """
+    inotify = INotify()
+    file_flags = flags.MODIFY | flags.CLOSE_WRITE
+    
+    if os.path.exists("/etc/ssh/sshd_config"):
+        try:
+            inotify.add_watch("/etc/ssh/sshd_config", file_flags)
+        except Exception as e:
+            print(f"WARNING: Could not watch /etc/ssh/sshd_config: {e}")
+    
+    return inotify
+
+
+def check_ssh_config_changes(inotify_watcher):
+    """
+    Non-blocking check for SSH config file changes.
+
+    Args:
+        inotify_watcher (INotify): The inotify instance watching sshd_config.
+
+    Returns:
+        bool: True if any changes were detected, False otherwise.
+    """
+    try:
+        events = inotify_watcher.read(timeout=0, read_delay=0)
+        if events:
+            print(f"INFO: SSH config file change detected — re-checking SSH settings")
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def load_services():
 
     # Run the systemctl command to list all services
@@ -3301,29 +3925,81 @@ def account_management(vulnerabilities):
         else:
             process_vulnerability(vuln, vulnerability_def)
 
-
 def local_policies(vulnerabilities):
     """
     Manages local security policies based on the provided vulnerabilities and records hits/misses.
-    
+
+    Uses caching for password-policy checks (which depend on PAM/security files tracked by inotify).
+    Other checks (like kernel version, SSH config) are always executed.
+
     Args:
         vulnerabilities (list): A list of vulnerabilities to check.
     """
+    global _capturing_policy_events
+
     write_to_html("<H3>SECURITY POLICIES</H3>")
+
+    # Define which vulnerability types use the cache (only those depending on tracked policy files)
+    CACHED_POLICY_TYPES = {
+        "Minimum Password Age",
+        "Maximum Password Age", 
+        "Minimum Password Length",
+        "Maximum Login Tries",
+        "Lockout Duration",
+        "Lockout Reset Duration",
+        "Password History",
+    }
+
+    # Separate vulnerabilities into cached and non-cached
+    cached_vulns = []
+    non_cached_vulns = []
+    
+    for vuln in vulnerabilities:
+        if vuln.name in CACHED_POLICY_TYPES:
+            cached_vulns.append(vuln)
+        else:
+            non_cached_vulns.append(vuln)
+
+    # ── Process cached vulnerabilities (PAM/security policy checks) ────────────
+    if _local_policy_cache_valid and local_policy_cache['populated'] and cached_vulns:
+        # Replay cached results for policy checks
+        for event in local_policy_cache['events']:
+            if event[0] == 'hit':
+                record_hit(event[1], event[2])
+            elif event[0] == 'miss':
+                record_miss(event[1])
+            elif event[0] == 'penalty':
+                record_penalty(event[1], event[2])
+    else:
+        # Re-run cached policy checks and capture results
+        local_policy_cache['events'] = []
+        _capturing_policy_events = True
+        try:
+            vulnerability_def = {
+                "Minimum Password Age": local_group_policy,
+                "Maximum Password Age": local_group_policy,
+                "Minimum Password Length": local_group_policy,
+                "Maximum Login Tries": local_group_policy,
+                "Lockout Duration": local_group_policy,
+                "Lockout Reset Duration": local_group_policy,
+                "Password History": local_group_policy,
+            }
+            for vuln in cached_vulns:
+                process_vulnerability(vuln, vulnerability_def)
+        finally:
+            _capturing_policy_events = False
+            local_policy_cache['populated'] = True
+
+    # ── Always process non-cached vulnerabilities ─────────────────────────────
     vulnerability_def = {
-        "Minimum Password Age": local_group_policy,
-        "Maximum Password Age": local_group_policy,
-        "Minimum Password Length": local_group_policy,
-        "Maximum Login Tries": local_group_policy,
-        "Lockout Duration": local_group_policy,
-        "Lockout Reset Duration": local_group_policy,
         "Check Kernel": check_kernel,
         "Disable SSH Root Login": local_group_policy,
-        "Password History": local_group_policy,
-        "Audit": local_group_policy,
+        "Audit": local_group_policy
     }
-    for vuln in vulnerabilities:
+    for vuln in non_cached_vulns:
         process_vulnerability(vuln, vulnerability_def)
+
+
 
 def program_management(vulnerabilities):
     """
@@ -3360,6 +4036,7 @@ def file_management(vulnerabilities):
         "Forensic": forensic_question,
         "Check Hosts": check_hosts,
         "Bad File/Directory": bad_file,
+        "Bad File": bad_file,
         "Add Text to File": add_text_to_file,
         "Remove Text From File": remove_text_from_file,
         "File Permissions": permission_checks,
@@ -3423,16 +4100,15 @@ try:
     categories = Categories.get_categories()
     Vulnerabilities = db_handler.OptionTables()
     Vulnerabilities.initialize_option_table()
-except:
+except KeyboardInterrupt:
+    print("INFO: Scoring engine stopped by user.")
+    sys.exit(0)
+except Exception:
     f = open("scoring_engine.log", "a")
     e = traceback.format_exc()
     f.write(str(e))
     f.close()
-    messagebox.showerror(
-        "Crash Report",
-        "The scoring engine has stopped working, a log has been saved to "
-        + os.path.abspath("scoring_engine.log"),
-    )
+    print("ERROR: The scoring engine has stopped working, a log has been saved to " + os.path.abspath("scoring_engine.log"))
     sys.exit()
 
 prePoints = 0
@@ -3464,19 +4140,24 @@ iterations = 0
 # Initialize inotify watchers and load initial data
 program_inotify = setup_program_inotify()
 version_inotify = setup_versions_inotify()
+policy_inotify  = setup_policy_inotify()    # watches /etc/pam.d, /etc/security, /etc/login.defs
+ssh_config_inotify = setup_ssh_config_inotify()  # watches /etc/ssh/sshd_config
 
 # Load initial state
 program_content = load_programs()
 program_versions = load_versions()
+# Policy settings are loaded on first loop iteration (cache not yet populated)
 
 while True:
     try:
+        # Reset scoring totals each loop to avoid cumulative double counting
+        total_points = 0
+        total_vulnerabilities = 0
+        critical_items = []
+
         # DEVELOPING: Reload settings from database each iteration to catch configuration updates
         if developerMode:
             menuSettings = Settings.get_settings(False)
-            total_points = 0
-            total_vulnerabilities = 0
-            critical_items = []
             # Build password requirements cache from all categories
             password_requirements_cache = build_password_requirements_cache(categories, Vulnerabilities)
         
@@ -3492,9 +4173,24 @@ while True:
         if check_version_changes(version_inotify):
             program_versions = load_versions()
             print("INFO: Package versions reloaded due to dpkg changes")
+
+        # Only reload policy settings and invalidate the local-policy cache when
+        # inotify detects a write/create/delete inside /etc/pam.d or /etc/security,
+        # or a write to /etc/login.defs — or on the very first iteration.
+        if check_policy_changes(policy_inotify) or not local_policy_cache['populated']:
+            _local_policy_cache_valid = False
+            login_policy_settings_content, pamd_policy_settings_content, password_settings_content, common_auth_content, faillock_settings_content = load_policy_settings()
+        else:
+            # No changes detected — local_policies() will replay from cache
+            _local_policy_cache_valid = True
         
-        # Always reload policy settings (small files, quick reads)
-        login_policy_settings_content, pamd_policy_settings_content, password_settings_content, common_auth_content, faillock_settings_content = load_policy_settings() # Polls for configuration information.
+        # Only invalidate SSH config cache when sshd_config changes or first iteration
+        if check_ssh_config_changes(ssh_config_inotify) or not ssh_config_cache['populated']:
+            _ssh_config_cache_valid = False
+        else:
+            # No changes detected — check_ssh_permit_root_login() will use cache
+            _ssh_config_cache_valid = True
+
         print("Scoring Engine loop 1st:" + str(iterations))
         time.sleep(10)
         draw_head()
@@ -3509,13 +4205,48 @@ while True:
         check_score()
         print("Scoring Engine loop 2nd:" + str(iterations))
         time.sleep(10)
-    except:
-        f = open("scoring_engine.log", "w")
-        e = traceback.format_exc()
-        f.write(str(e))
-        f.close()
-        messagebox.showerror(
-            "Crash Report",
-            "The scoring engine has stopped working, a log has been saved to "
-            + os.path.abspath("scoring_engine.log"),
-        )
+    except KeyboardInterrupt:
+        print("INFO: Scoring engine stopped by user.")
+        sys.exit(0)
+    except Exception:
+        # ── Log the error ────────────────────────────────────────────────────
+        log_path = os.path.abspath("scoring_engine.log")
+        with open(log_path, "a") as f:                      # "a" = append, not overwrite
+            f.write(f"\n{'='*60}\n")
+            f.write(f"ERROR at {datetime.datetime.now()}\n")
+            f.write(traceback.format_exc())
+            f.write(f"{'='*60}\n")
+        
+        print(f"ERROR: Scoring engine loop failed — see {log_path}")
+
+        # ── Write the error visibly into the score report ────────────────────
+        # draw_head() already wrote the .tmp file — append the error before
+        # draw_tail() would have closed it. If draw_head() itself failed,
+        # we write a fresh error page directly.
+        try:
+            error_msg = traceback.format_exc().replace('\n', '<br>').replace(' ', '&nbsp;')
+            write_to_html(
+                f'<hr><p style="color:red;font-weight:bold;">&#9888; Scoring engine error — '
+                f'check {log_path}</p>'
+                f'<pre style="color:red;font-size:12px;">{error_msg}</pre>'
+            )
+            draw_tail()
+        except Exception:
+            # draw_head() likely never ran — write a standalone error page
+            try:
+                with open(scoreIndex, "w") as ef:
+                    ef.write(
+                        f'<!doctype html><html><head><title>CSEL Error</title>'
+                        f'<meta http-equiv="refresh" content="30"></head>'
+                        f'<body style="background-color:powderblue;">'
+                        f'<h2 style="color:red;">&#9888; Scoring Engine Error</h2>'
+                        f'<p>Check <code>{log_path}</code> for details.</p>'
+                        f'</body></html>'
+                    )
+                os.chmod(scoreIndex, 0o777)
+            except Exception:
+                pass    # Absolute last resort — nothing more we can do
+
+        # ── Keep the engine alive — sleep then retry next loop ───────────────
+        print("INFO: Retrying in 30 seconds...")
+        time.sleep(30)

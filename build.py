@@ -40,8 +40,12 @@ def build_configurator():
     print("\nBuilding configurator...")
     print("\n" + "=" * 60)
 
+    # Use venv's pyinstaller if it exists, otherwise use system pyinstaller
+    venv_pyinstaller = os.path.join(os.path.dirname(__file__), ".venv", "bin", "pyinstaller")
+    pyinstaller_cmd = venv_pyinstaller if os.path.exists(venv_pyinstaller) else "pyinstaller"
+
     cmd = [
-        "pyinstaller",
+        pyinstaller_cmd,
         "--onefile",
         "--name=configurator_DO_NOT_TOUCH",
         "--distpath=dist",
@@ -68,8 +72,12 @@ def build_scoring_engine():
     print("Building scoring_engine...")
     print("\n" + "=" * 60)
 
+    # Use venv's pyinstaller if it exists, otherwise use system pyinstaller
+    venv_pyinstaller = os.path.join(os.path.dirname(__file__), ".venv", "bin", "pyinstaller")
+    pyinstaller_cmd = venv_pyinstaller if os.path.exists(venv_pyinstaller) else "pyinstaller"
+
     cmd = [
-        "pyinstaller",
+        pyinstaller_cmd,
         "--onefile",
         "--name=scoring_engine_DO_NOT_TOUCH",
         "--distpath=dist",
@@ -132,7 +140,6 @@ def build_scoring_engine():
 #     target_dir = "/etc/CYBERPATRIOT_DO_NOT_REMOVE" # Directory to store icons and score file
 #     icons = [
 #         "logo.png",
-#         "iguana.png",
 #         "CCC_logo.png",
 #         "SoCalCCCC.png"
 #     ]
@@ -195,16 +202,16 @@ def main():
         # Build both binaries
         response = input("Build scoring_engine? (Y/n): ")
         if response.lower() in ["", "y"]:
-            result2 = build_scoring_engine()
+            result1 = build_scoring_engine()
         else:
             print("Skipping scoring_engine build.")
-            result2 = 0
-        response = input("Build configurator? (Y/n): ")
-        if response.lower() in ["", "y"]:
-            result1 = build_configurator()
-        else:
-            print("Skipping configurator build.")
             result1 = 0
+        # response = input("Build configurator? (Y/n): ")
+        # if response.lower() in ["", "y"]:
+        #     result1 = build_configurator()
+        # else:
+        #     print("Skipping configurator build.")
+        #     result1 = 0
 
 
         # # Check and install scoring_engine Cronjob as well as the CYBER directory for assets.
@@ -213,7 +220,7 @@ def main():
         # TODO: Create a symbolic link in /usr/local/bin or use systemctl to manage service instead of crontab
         # TODO: Migrate and cotinue consolidating install.sh
 
-        if result1 == 0 and result2 == 0:
+        if result1 == 0:
             print("\n" + "=" * 60)
             print("✓ Build and configuration completed/skipped successfully!")
             print("=" * 60)

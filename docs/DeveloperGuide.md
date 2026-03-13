@@ -363,6 +363,8 @@ Scores competitors for configuring how long accounts remain locked after exceedi
 
 **Note:** Works with pam_faillock module. unlock_time value is in seconds (e.g., 900 = 15 minutes).
 
+**Tests:**
+
 ## Lockout Reset Duration
 **Function:** `local_group_policy(vulnerability, "Lockout Reset Duration")`
 
@@ -749,6 +751,35 @@ Scores competitors for removing unauthorized or malicious files from the system.
 - [x] Create the bad directory, should record a miss
 - [x] Remove the bad directory using `rm -rf`, should record a hit
 
+## Check Hosts
+**Function:** `check_hosts(vulnerability)`
+
+Scores competitors for removing unauthorized or malicious entries from the system hosts file.
+
+**Implementation:**
+- Opens `/etc/hosts` and reads all lines
+- Defines a set of default regex patterns covering standard Linux host entries:
+  - `127.0.0.1 ...` (IPv4 loopback)
+  - `127.0.1.1 ...` (hostname alias)
+  - `::1 ...` (IPv6 loopback)
+  - `fe00::0`, `ff00::0`, `ff02::1`, `ff02::2` (IPv6 multicast/special)
+- Iterates over every line, skipping empty lines and comment-only lines (`#`)
+- Checks each remaining line against all default patterns using `re.match()`
+- Any line that does not match a default pattern is collected as a non-default entry
+- If no non-default lines remain, records a hit
+- If any non-default entries exist, records a miss
+- Records miss on `IOError`, `PermissionError`, or any unexpected exception
+
+**Scoring Behavior:**
+- Awards points when `/etc/hosts` contains only standard default entries
+- Records miss if any non-standard host mappings are present
+- Records miss if the hosts file cannot be read
+
+**Configuration Files Checked:**
+1. `/etc/hosts`
+
+**Note:** Default patterns are tuned for Linux Mint. Other distributions may use slightly different defaults — update the `default_patterns` list in the function if needed.
+
 ## Add Text to File
 **Function:** `add_text_to_file(vulnerability)`
 
@@ -854,25 +885,28 @@ Scores competitors for properly configuring file or directory permissions for sp
 Scores competitors for disabling unwanted applications from running at startup through Linux Mint's Startup Applications GUI or equivalent autostart mechanisms.
 
 **Implementation:**
-- Defines global autostart directory: `Path("/etc/xdg/autostart")` (system-wide autostart entries)
-- Determines user home directory properly when running under sudo:
-  - Checks `SUDO_USER` environment variable to get actual user (not root)
-  - Constructs user autostart path as `{user_home}/.config/autostart`
-  - Falls back to `Path.home()` if not running under sudo
-- Iterates through configured startup app vulnerabilities
-- Gets program name from `vulnerability[vuln].get("Program Name", "")`
-- Ensures `.desktop` extension is present (adds if missing)
-- Constructs paths for both global and user desktop files:
-  - `global_desktop_path = /etc/xdg/autostart/{program}.desktop`
-  - `user_desktop_path = ~/.config/autostart/{program}.desktop`
+- Determines actual user home directory by checking `SUDO_USER` env var (avoids defaulting to root when running with sudo); falls back to `Path.home()`
+- Constructs user autostart path as `{user_home}/.config/autostart`
+- Validates desktop files using `_is_valid_autostart_file()`, which checks:
+  - Has a `[Desktop Entry]` section
+  - Has required keys: `Name`, `Exec`, `Type` (case-sensitive)
+  - `Type=Application` (whitespace/case-insensitive)
+  - `Exec` binary is resolvable (exists on filesystem or in `PATH`)
+  - Returns `(is_valid, is_hidden)` tuple
 
 **Scoring Behavior:**
-- Awards points when application is properly disabled (has `Hidden=true` in appropriate location)
-- Records miss if application is not disabled or configuration is incorrect
+- Scoring logic (evaluated in priority order):
+  1. **User autostart file** (`~/.config/autostart/<program>.desktop`): if valid, hit when `Hidden=true`, miss otherwise; stop here
+  2. **First matching global autostart file** (from XDG config dirs): if valid, hit when `Hidden=true`, miss otherwise; stop here
+  3. **No valid autostart entry found anywhere**: records hit (program is not configured to autostart)
+- Awards points when application's first valid `.desktop` entry has `Hidden=true` (case-sensitive, must be lowercase)
+- Awards points when no valid autostart entry is found at all (program cannot autostart)
+- Records miss if a valid `.desktop` entry exists but `Hidden` is not exactly `true`
+- User autostart file takes priority over global autostart files
 
 **Configuration Files Checked:**
-1. `/etc/xdg/autostart/{program}.desktop` - System-wide autostart entries
-2. `~/.config/autostart/{program}.desktop` - User-specific overrides
+1. `~/.config/autostart/{program}.desktop` - User-specific override (highest priority)
+2. `{xdg_config_dir}/autostart/{program}.desktop` - System-wide autostart entries (e.g. `/etc/xdg/autostart/`)
 
 **Note:** When running as sudo, the engine must detect real user via `SUDO_USER` environment variable or it will default to root.
 
@@ -913,64 +947,14 @@ Scores competitors for disabling unwanted applications from running at startup t
 Scores competitors for opening required network ports for legitimate services.
 
 **Implementation:**
-- Receives `name` parameter to differentiate between "Check Port Open" and "Check Port Closed"
-- Sets `expect_open = True` when name is "Check Port Open"
-- Iterates through configured port vulnerabilities
-- Extracts configuration with defaults
-- Translates special IPv6 notation
-- Checks UFW firewall rules using `check_ufw_rule(port, protocol)`:
-  - Returns "ALLOW" if port is explicitly allowed by UFW
-  - Returns "DENY" if port is explicitly denied/blocked by UFW
-  - Returns "DEFAULT" if no specific rule exists (UFW active = default deny)
-  - Returns "ALLOW" if UFW is inactive or cannot be checked
-- Checks if port is listening by calling appropriate check function based on protocol
-  - TCP: Uses socket connection test (`check_tcp`)
-  - UDP: Uses `ss -ulnp` to check for listening processes (more reliable than packet probing)
-- Determines if port is truly open:
-  - Port is OPEN only if: UFW allows traffic AND port is listening
-  - Port is CLOSED if: UFW denies traffic OR port is not listening
-- Awards points when: port IS open (both UFW allows AND listening)
-- Records miss when port is not truly open
+- Runs `sudo ufw status numbered` once and parses all rules before scoring. Each rule line is parsed into port, proto (`tcp`/`udp`/`any` for protocol-less rules), action, from, and is_v6. Rules stay in UFW priority order (lower number wins).
+- `ip_filter` is enabled when a specific IP is set (not empty/`0.0.0.0`/`::`/`anywhere`). When enabled, only IPv4 rules are considered.
+- For each vulnerability, finds the first matching rule using port, protocol, IP version, and `from` field. With no IP configured, only `From = Anywhere` rules match. With a specific IP, `From = <IP>` or `From = Anywhere` both match.
+- HIT if the first matching rule is an ALLOW.
 
 **Scoring Behavior:**
-- Awards points when BOTH conditions are met:
-  - UFW allows the traffic (or is inactive)
-  - Port is actually listening (socket connection succeeds)
-- Records miss if UFW blocks/denies the port (even if service is listening)
-- Records miss if port is not listening (even if UFW allows it)
-- Records miss if port configuration is invalid (missing port, invalid format)
-- Records miss if protocol is not recognized (only TCP and UDP supported)
-- Records miss if port check encounters an error
-- Display message includes program name (if provided), protocol, port number, and state
-
-**Tests:**
-
-**Test Case 1: TCP Port Open**
-- [x] Install openssh-server if not installed.
-- [x] Configure "Check Port Open" with Protocol="TCP", IP="0.0.0.0"(or whatever ip appears from ss), Port="22" (SSH usually running)
-- [x] If SSH is running, should record a hit
-- [x] Stop SSH with `sudo systemctl stop ssh`(might need to stop ssh.socket), wait for next cycle, should record a miss
-- [x] Start SSH with `sudo systemctl start ssh`(might need to start ssh.socket), wait for next cycle, should record a hit
-- [x] Use ufw to close port 22/TCP, should record a miss
-- [x] Configure port 9999 (likely closed), should record a miss
-- [x] Use `nc -l 9999` to open port 9999 in another terminal, should record a hit
-- [x] Kill nc process, should record a miss
-
-**Test Case 2: UDP Port Open**
-- [x] Configure "Check Port Open" with Protocol="UDP", IP="127.0.0.1", Port="53" (DNS)
-- [x] If DNS service running, may record a hit (UDP unreliable)
-- [x] Use ufw to close port 53, should record a miss
-
-**Test Case 3: IPv6 and Special Notation**
-- [x] Configure with IP="[::1]" (IPv6 localhost with brackets), should convert and check successfully
-- [x] Configure with IP="::" (IPv6 any address), should map to 127.0.0.1
-- [x] Configure with IP="::1" (IPv6 localhost without brackets), should map to 127.0.0.1
-
-**Test Case 4: Missing or Invalid Configuration**
-- [x] Configure with empty Port field, should record a miss and log warning
-- [x] Configure with Protocol="ICMP" (unsupported), should record a miss and log warning
-- [x] Configure with missing IP field, should record a miss
-- [ ] Configure with missing Protocol field, should default to TCP
+- Awards points when an explicit UFW ALLOW rule satisfying port, protocol, and From requirements exists.
+- Records miss if no such rule exists, if UFW can't be read, or if port is missing/invalid.
 
 ## Check Port Closed
 **Function:** `portVulns(vulnerability, "Check Port Closed")`
@@ -978,76 +962,17 @@ Scores competitors for opening required network ports for legitimate services.
 Scores competitors for closing unnecessary or vulnerable network ports to improve security.
 
 **Implementation:**
-- Receives `name` parameter to differentiate between "Check Port Open" and "Check Port Closed"
-- Sets `expect_open = False` when name is "Check Port Closed"
-- Iterates through configured port vulnerabilities
-- Extracts configuration with defaults
-- Translates special IPv6 notation
-- Checks UFW firewall rules using `check_ufw_rule(port, protocol)`:
-  - Returns "ALLOW" if port is explicitly allowed by UFW
-  - Returns "DENY" if port is explicitly denied/blocked by UFW
-  - Returns "DEFAULT" if no specific rule exists (UFW active = default deny)
-  - Returns "ALLOW" if UFW is inactive or cannot be checked
-- Checks if port is listening by calling appropriate check function based on protocol
-  - TCP: Uses socket connection test (`check_tcp`)
-  - UDP: Uses `ss -ulnp` to check for listening processes (more reliable than packet probing)
-- Determines if port is truly open:
-  - Port is OPEN only if: UFW allows traffic AND port is listening
-  - Port is CLOSED if: UFW denies traffic OR port is not listening
-- Awards points when: port IS NOT open (either UFW denies OR not listening)
-- Records miss when port is still open (UFW allows AND listening)
+- Uses the same UFW parsing pipeline as Check Port Open. With a specific IP configured, only IPv4 rules are checked; without one, both IPv4 and IPv6 are checked independently.
+- For each applicable IP version, finds the first matching rule. Derives whether that rule is an ALLOW or DENY (or absent).
+- HIT if UFW is active and no ALLOW rule is found on any checked IP version (port is blocked by explicit deny or default deny).
+- MISS if UFW is inactive (no default deny in effect) or an ALLOW rule exists on any checked side.
 
 **Scoring Behavior:**
-- Awards points when EITHER condition is met:
-  - UFW blocks/denies the port (even if service is listening)
-  - Port is not listening (even if UFW allows it)
-- Awards points if both UFW blocks AND port not listening (doubly closed)
-- Records miss if both UFW allows the traffic AND port is listening
-- Records miss if port configuration is invalid (missing port, invalid format)
-- Records miss if protocol is not recognized (only TCP and UDP supported)
-- Records miss if port check encounters an error
-- Display message includes program name (if provided), protocol, port number, and state
-- **Opposite scoring from Check Port Open**: awards points when port is closed, not open
+- Awards points when UFW is active and no matching ALLOW rule exists. Hit message describes the reason (explicit deny or default deny, IPv4/IPv6 as applicable).
+- Records miss if UFW is inactive, an ALLOW rule is found, or port is missing/invalid.
+- Decision is based solely on UFW policy — no socket/listening check is performed.
 
-**Note:** This vulnerability type is used to ensure unnecessary services are disabled. Commonly used for ports like Telnet (23), FTP (21), or other insecure services that should not be running.
-
-**Tests:**
-
-**Test Case 1: TCP Port Closed - Service Not Listening**
-- [ ] Configure "Check Port Closed" with Protocol="TCP", IP="127.0.0.1", Port="23" (Telnet, usually closed)
-- [ ] Verify port 23 is not listening with `sudo ss -tulnp | grep :23`, should record a hit
-- [ ] Install and start Telnet with `sudo apt install telnetd && sudo systemctl start telnetd`
-- [ ] If UFW allows port 23, should record a miss (listening AND allowed)
-- [ ] Stop Telnet with `sudo systemctl stop telnetd`, should record a hit (not listening)
-- [ ] Uninstall Telnet, should continue to record a hit
-
-**Test Case 1b: TCP Port Closed - UFW Blocking**
-- [ ] Configure "Check Port Closed" with Protocol="TCP", IP="127.0.0.1", Port="22" (SSH)
-- [ ] Ensure SSH is running with `sudo systemctl start ssh`
-- [ ] Run `sudo ufw allow 22/tcp`, should record a miss (UFW allows AND listening)
-- [ ] Run `sudo ufw deny 22/tcp`, wait for next cycle, should record a hit (UFW blocks)
-- [ ] Verify SSH still shows in `sudo ss -tulnp | grep :22` but score is a hit (firewall blocks it)
-- [ ] Stop SSH with `sudo systemctl stop ssh`, should still record a hit (doubly closed: UFW blocks AND not listening)
-- [ ] Run `sudo ufw delete deny 22/tcp`, should still record a hit (not listening)
-- [ ] Start SSH, should record a miss (listening AND no deny rule)
-
-**Test Case 2: Close Running Service**
-- [ ] Start a test service on port 8080 with `python3 -m http.server 8080` in background
-- [ ] Configure "Check Port Closed" for port 8080, should record a miss (port is open)
-- [ ] Kill the python process, wait for next cycle, should record a hit
-- [ ] Restart the service, should record a miss again
-
-**Test Case 3: UDP Port Closed**
-- [ ] Configure "Check Port Closed" with Protocol="UDP", IP="127.0.0.1", Port="9999" (likely closed)
-- [ ] Should record a hit (port closed)
-- [ ] Start UDP listener with `nc -u -l 9999`, may record a miss (UDP unreliable)
-- [ ] Kill nc process, should record a hit
-
-**Test Case 3: Missing or Invalid Configuration**
-- [ ] Configure with empty Port field, should record a miss and log warning
-- [ ] Configure with Port="-1" (invalid), should record a miss and log warning
-- [ ] Configure with Protocol="HTTP" (unsupported), should record a miss and log warning
-- [ ] Configure with missing IP field, should default to 127.0.0.1 and check that
+**Note:** This vulnerability type is used to ensure unnecessary services are blocked. Commonly used for ports like Telnet (23), FTP (21), or other insecure services that should not be reachable.
 
 ## Turn On Firewall
 **Function:** `firewallVulns(vulnerability, "Turn On Firewall")`

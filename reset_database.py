@@ -131,14 +131,6 @@ def reset_database():
         print("=" * 60)
         print("✓ Database successfully deleted and recreated!")
         print("=" * 60)
-        print()
-        print("Next steps:")
-        print("  1. Run the configurator to set up your image")
-        print("  2. Configure all vulnerabilities and settings")
-        print("  3. Commit the configuration")
-        print("  4. Run ONE instance of scoring_engine.py")
-        print()
-        print("Remember: Always run only ONE scoring_engine.py at a time!")
         
         return True
             
