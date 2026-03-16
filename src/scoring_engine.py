@@ -32,6 +32,40 @@ from src import admin_test
 from src import db_handler
 from src import pamtester
 
+def ostype() -> str:
+    """
+    Detect whether the current OS is Ubuntu or Linux Mint.
+    Returns 'ubuntu', 'linuxmint', or the raw ID string if neither is matched.
+    Raises EnvironmentError if the OS cannot be determined.
+    """
+    os_release = "/etc/os-release"
+    if os.path.isfile(os_release):
+        with open(os_release) as f:
+            info = {}
+            for line in f:
+                line = line.strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    info[k] = v.strip('"').strip("'")
+        detected = info.get("ID", "").lower()
+    else:
+        result = subprocess.run(
+            ["lsb_release", "-si"],
+            capture_output=True, text=True
+        )
+        detected = result.stdout.strip().lower()
+
+    if detected in ("ubuntu", "linuxmint"):
+        return detected
+    elif detected:
+        print(f"Warning: Unrecognized OS type '{detected}', proceeding with caution.")
+        return detected
+    else:
+        raise EnvironmentError("Could not determine the OS type.")
+
+# Detect OS immediately on startup — available globally as OSTYPE
+OSTYPE = ostype()
+
 ### DEVELOPER TOOL ###
 """ 
 Set to True to enable developer mode features, 
@@ -75,6 +109,9 @@ _ssh_config_cache_valid: bool = False
 
 # Path for storing password requirement configuration timestamps
 TIMESTAMP_FILE = "/etc/CYBERPATRIOT/password_config_timestamps.json"
+
+# Icons are copied to /etc/CYBERPATRIOT_DO_NOT_REMOVE by service_setup.py
+ICONS_URI = "file:///etc/CYBERPATRIOT_DO_NOT_REMOVE"
 
 
 def load_config_timestamps():
@@ -129,7 +166,7 @@ def draw_head():
             "\n"
         )
         file.write(
-            '<table align="center" cellpadding="10"><tr><td><img src="file:///var/www/CYBERPATRIOT/CCC_logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="file:///var/www/CYBERPATRIOT/SoCalCCCC.png"></td></tr></table><br><H2>Your Score: #TotalScore#/'
+            '<table align="center" cellpadding="10"><tr><td><img src="' + ICONS_URI + "/logo.png" + '"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="' + ICONS_URI + "/SoCalCCCC.png" + '"></td></tr></table><br><H2>Your Score: #TotalScore#/'
             + str(menuSettings["Tally Points"])
             + "</H2><H2>Vulnerabilities: #TotalVuln#/"
             + str(menuSettings["Tally Vulnerabilities"])
@@ -185,26 +222,39 @@ def record_penalty(name, points):
     total_points -= int(points)
 
 
-def display_html_sh(path):  
+def display_html_sh(path):
     """
-    Creates a .desktop file for the scoring report on the user's desktop.
-    
+    For Ubuntu: copies ScoreReport.html directly to the user's Desktop.
+    For other distros: creates a ScoringReport.desktop launcher on the Desktop.
+
     Args:
-        path (str): The path to the user's desktop directory.
+        path (str): The path to the user's desktop directory (trailing slash).
     """
     # Ensure the Desktop directory exists
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
-    
-    with open(path + "ScoringReport.desktop", "w") as dt_f:
-        dt_f.write(
-            """[Desktop Entry]
+
+    if OSTYPE == "ubuntu":
+        src = "/var/www/CYBERPATRIOT/ScoreReport.html"
+        dst = path + "ScoreReport.html"
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+    else:
+        with open(path + "ScoringReport.desktop", "w") as dt_f:
+            dt_f.write(
+                """[Desktop Entry]
 Name = Scoring Report
 Exec = xdg-open /var/www/CYBERPATRIOT/ScoreReport.html
 Icon = /var/www/CYBERPATRIOT/ScoringEngineLinuxBig.png
 Type = Application
 Categories = Development;HTML;
 Terminal = false"""
+            )
+        actual_user, _ = get_actual_user_info()
+        subprocess.run(
+            ["sudo", "-u", actual_user, "gio", "set",
+             path + "ScoringReport.desktop", "metadata::trusted", "true"],
+            check=False
         )
 
 
@@ -228,14 +278,13 @@ def draw_tail():
     # shutil.copy('/var/www/CYBERPATRIOT/ScoreReport.html', '/home/' + actual_user + '/Desktop/')
     # os.chown('/home/' + actual_user + '/Desktop/ScoreReport.html', actual_uid, actual_uid)
     display_html_sh("/home/" + actual_user + "/Desktop/")
-    os.chown(
-        "/home/" + actual_user + "/Desktop/ScoringReport.desktop",
-        actual_uid,
-        actual_uid,
-    )
-    os.chmod(
-        "/home/" + actual_user + "/Desktop/ScoringReport.desktop", 0o770
-    )
+    if OSTYPE == "ubuntu":
+        desktop_file = "/home/" + actual_user + "/Desktop/ScoreReport.html"
+    else:
+        desktop_file = "/home/" + actual_user + "/Desktop/ScoringReport.desktop"
+    if os.path.exists(desktop_file):
+        os.chown(desktop_file, actual_uid, actual_uid)
+        os.chmod(desktop_file, 0o770)
 
 
 def initialize_score_report():
@@ -263,7 +312,7 @@ def initialize_score_report():
             "\n"
         )
         file.write(
-            '<table align="center" cellpadding="10"><tr><td><img src="file:///var/www/CYBERPATRIOT/CCC_logo.png"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="file:///var/www/CYBERPATRIOT/SoCalCCCC.png"></td></tr></table><br><H2>Your Score: 0/'
+            '<table align="center" cellpadding="10"><tr><td><img src="' + ICONS_URI + "/logo.png" + '"></td><td><div align="center"><H2>Cyberpatriot Scoring Engine:Linux v1.1</H2></div></td><td><img src="' + ICONS_URI + "/SoCalCCCC.png" + '"></td></tr></table><br><H2>Your Score: 0/'
             + str(current_settings["Tally Points"])
             + "</H2><H2>Vulnerabilities: 0/"
             + str(current_settings["Tally Vulnerabilities"])
@@ -281,14 +330,13 @@ def initialize_score_report():
 
     # Ensure desktop icon exists
     display_html_sh("/home/" + actual_user + "/Desktop/")
-    os.chown(
-        "/home/" + actual_user + "/Desktop/ScoringReport.desktop",
-        actual_uid,
-        actual_uid,
-    )
-    os.chmod(
-        "/home/" + actual_user + "/Desktop/ScoringReport.desktop", 0o770
-    )
+    if OSTYPE == "ubuntu":
+        desktop_file = "/home/" + actual_user + "/Desktop/ScoreReport.html"
+    else:
+        desktop_file = "/home/" + actual_user + "/Desktop/ScoringReport.desktop"
+    if os.path.exists(desktop_file):
+        os.chown(desktop_file, actual_uid, actual_uid)
+        os.chmod(desktop_file, 0o770)
 
 
 # Extra Functions
@@ -372,24 +420,39 @@ def check_score():
                 print("Warning: Cannot send notification - user info not available")
                 return
         
-        try:
-            # Set up environment for the user's D-Bus session
-            env = os.environ.copy()
-            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{actual_uid}/bus"
-            env["DISPLAY"] = ":0"
-            env["XDG_RUNTIME_DIR"] = f"/run/user/{actual_uid}"
-            
+        try:            
             # Run notify-send as the actual user
-            subprocess.run(
-                ["sudo", "-u", actual_user, "notify-send", 
-                 "-i", "utilities-terminal", 
-                 "CyberPatriot", 
-                 message],
-                env=env,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+            if(OSTYPE == "ubuntu"):
+                subprocess.run([
+                    "sudo", "-u", actual_user,
+                    "env",
+                    f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{actual_uid}/bus",
+                    f"DISPLAY=:0",
+                    f"XDG_RUNTIME_DIR=/run/user/{actual_uid}",
+                    "notify-send",
+                    "-i", "utilities-terminal",
+                    "CyberPatriot",
+                    message],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                # Set up environment for the user's D-Bus session
+                env = os.environ.copy()
+                env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{actual_uid}/bus"
+                env["DISPLAY"] = ":0"
+                env["XDG_RUNTIME_DIR"] = f"/run/user/{actual_uid}"
+                subprocess.run(
+                    ["sudo", "-u", actual_user, "notify-send", 
+                    "-i", "utilities-terminal", 
+                    "CyberPatriot", 
+                    message],
+                    env=env,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
         except Exception as e:
             print(f"Notification failed: {e}")
     
@@ -967,21 +1030,21 @@ def portVulns(vulnerability, name):
             # IP filtering: disabled for empty / wildcard addresses
             ip_filter = config_ip not in ("", " ", "0.0.0.0", "::", "anywhere")
 
-            def first_applicable_rule(is_v6_target):
+            def first_applicable_rule(is_v6_target, proto_override=None):
                 """
                 Return the first (lowest-numbered) UFW rule that matches
                 port + protocol + IP requirements for the given IP version.
-                Rules are already stored in priority order from ufw status numbered output.
+                proto_override: if provided, use instead of the outer `protocol` var
+                (used when protocol == 'any' to check tcp and udp separately).
                 """
+                check_proto = proto_override if proto_override is not None else protocol
                 for r in parsed_rules:  # already in priority order — no sort needed
-                    print("DEBUG: Evaluating rule:", r)
-                    print(f"DEBUG: Configuration - port={port}, protocol={protocol}, ip_filter={ip_filter}, config_ip={config_ip}, is_v6_target={is_v6_target}")
                     if r['port'] != port:
                         continue
                     if r['is_v6'] != is_v6_target:
                         continue
-                    # Protocol: rule proto 'any' covers both tcp and udp
-                    if r['proto'] != 'any' and r['proto'] != protocol:
+                    # Rule proto 'any' (no qualifier in UFW) covers both tcp and udp
+                    if r['proto'] != 'any' and r['proto'] != check_proto:
                         continue
                     # From: must satisfy IP requirement
                     if ip_filter:
@@ -995,57 +1058,93 @@ def portVulns(vulnerability, name):
                     return r
                 return None
 
-            first_v4 = first_applicable_rule(False)
-            # Only check v6 when no specific IP is configured; a specific IP is
-            # always an IPv4 address so its UFW rule will never appear as a v6 rule.
-            first_v6 = None if ip_filter else first_applicable_rule(True)
-
-            has_v4_allow = first_v4 is not None and first_v4['action'] == 'allow'
-            has_v6_allow = first_v6 is not None and first_v6['action'] == 'allow'
-            has_allow    = has_v4_allow or has_v6_allow
-            has_v4_deny  = first_v4 is not None and first_v4['action'] == 'deny'
-            has_v6_deny  = first_v6 is not None and first_v6['action'] == 'deny'
-
             display_name = program_name if program_name else f"Port {port}"
-            proto_label  = protocol.upper()
 
-            if expect_open:
-                # Port Open: need an explicit ALLOW rule
-                if has_allow:
-                    record_hit(
-                        f"{display_name} ({proto_label}/{port}) is allowed by UFW",
-                        vulnerability[vuln]["Points"],
-                    )
+            if protocol == 'any':
+                # "ANY" protocol: score a HIT only when BOTH tcp and udp satisfy
+                # the open/closed requirement (via protocol-specific or catch-all rules).
+                tcp_v4 = first_applicable_rule(False, 'tcp')
+                tcp_v6 = None if ip_filter else first_applicable_rule(True, 'tcp')
+                udp_v4 = first_applicable_rule(False, 'udp')
+                udp_v6 = None if ip_filter else first_applicable_rule(True, 'udp')
+
+                tcp_allowed = (tcp_v4 is not None and tcp_v4['action'] == 'allow') or \
+                              (tcp_v6 is not None and tcp_v6['action'] == 'allow')
+                udp_allowed = (udp_v4 is not None and udp_v4['action'] == 'allow') or \
+                              (udp_v6 is not None and udp_v6['action'] == 'allow')
+
+                if expect_open:
+                    # Both protocols must be explicitly allowed
+                    if tcp_allowed and udp_allowed:
+                        record_hit(
+                            f"{display_name} (TCP+UDP/{port}) is allowed by UFW",
+                            vulnerability[vuln]["Points"],
+                        )
+                    else:
+                        record_miss("Firewall Management")
                 else:
-                    record_miss("Firewall Management")
+                    if not ufw_active:
+                        record_miss("Firewall Management")
+                    elif tcp_allowed or udp_allowed:
+                        # At least one protocol still has an ALLOW rule
+                        record_miss("Firewall Management")
+                    else:
+                        record_hit(
+                            f"{display_name} (TCP+UDP/{port}) is closed — not allowed (UFW default deny)",
+                            vulnerability[vuln]["Points"],
+                        )
 
             else:
-                # Port Closed: all applicable sides must have no ALLOW rule.
-                # When an IP is specified only v4 is checked; otherwise both v4 and v6.
-                if not ufw_active:
-                    # UFW inactive — default deny is not in effect, can't confirm closed
-                    record_miss("Firewall Management")
-                elif has_v4_allow or has_v6_allow:
-                    # At least one checked side still has an ALLOW rule
-                    record_miss("Firewall Management")
-                else:
-                    if ip_filter:
-                        # IP-specific check: only v4 matters
-                        reason = "explicitly denied by UFW (IPv4)" if has_v4_deny else "not allowed (UFW default deny)"
+                first_v4 = first_applicable_rule(False)
+                # Only check v6 when no specific IP is configured; a specific IP is
+                # always an IPv4 address so its UFW rule will never appear as a v6 rule.
+                first_v6 = None if ip_filter else first_applicable_rule(True)
+
+                has_v4_allow = first_v4 is not None and first_v4['action'] == 'allow'
+                has_v6_allow = first_v6 is not None and first_v6['action'] == 'allow'
+                has_allow    = has_v4_allow or has_v6_allow
+                has_v4_deny  = first_v4 is not None and first_v4['action'] == 'deny'
+                has_v6_deny  = first_v6 is not None and first_v6['action'] == 'deny'
+
+                proto_label  = protocol.upper()
+
+                if expect_open:
+                    # Port Open: need an explicit ALLOW rule
+                    if has_allow:
+                        record_hit(
+                            f"{display_name} ({proto_label}/{port}) is allowed by UFW",
+                            vulnerability[vuln]["Points"],
+                        )
                     else:
-                        # No IP: both v4 and v6 checked
-                        if has_v4_deny and has_v6_deny:
-                            reason = "explicitly denied by UFW (IPv4 and IPv6)"
-                        elif has_v4_deny:
-                            reason = "explicitly denied by UFW (IPv4, IPv6 default deny)"
-                        elif has_v6_deny:
-                            reason = "explicitly denied by UFW (IPv6, IPv4 default deny)"
+                        record_miss("Firewall Management")
+
+                else:
+                    # Port Closed: all applicable sides must have no ALLOW rule.
+                    # When an IP is specified only v4 is checked; otherwise both v4 and v6.
+                    if not ufw_active:
+                        # UFW inactive — default deny is not in effect, can't confirm closed
+                        record_miss("Firewall Management")
+                    elif has_v4_allow or has_v6_allow:
+                        # At least one checked side still has an ALLOW rule
+                        record_miss("Firewall Management")
+                    else:
+                        if ip_filter:
+                            # IP-specific check: only v4 matters
+                            reason = "explicitly denied by UFW (IPv4)" if has_v4_deny else "not allowed (UFW default deny)"
                         else:
-                            reason = "not allowed (UFW default deny)"
-                    record_hit(
-                        f"{display_name} ({proto_label}/{port}) is closed — {reason}",
-                        vulnerability[vuln]["Points"],
-                    )
+                            # No IP: both v4 and v6 checked
+                            if has_v4_deny and has_v6_deny:
+                                reason = "explicitly denied by UFW (IPv4 and IPv6)"
+                            elif has_v4_deny:
+                                reason = "explicitly denied by UFW (IPv4, IPv6 default deny)"
+                            elif has_v6_deny:
+                                reason = "explicitly denied by UFW (IPv6, IPv4 default deny)"
+                            else:
+                                reason = "not allowed (UFW default deny)"
+                        record_hit(
+                            f"{display_name} ({proto_label}/{port}) is closed — {reason}",
+                            vulnerability[vuln]["Points"],
+                        )
 
 
 def audit_check():
@@ -2008,53 +2107,49 @@ def user_change_password(vulnerability):
     # Use the global cache built in the main loop
     global password_requirements_cache
     requirements_to_check = password_requirements_cache.copy()
-    
     for vuln in vulnerability:
         if vuln != 1:
             username = vulnerability[vuln]["User Name"]
-            
+
             # Step 1: Detect password hash change and record timestamp
             # Get current hash and compare with stored hash to detect changes
             try:
                 current_hash = get_password_hash(username)
-                
+
                 # Load stored timestamps and hashes
                 config_timestamps = load_config_timestamps()
                 stored_data = config_timestamps.get(username, {})
                 stored_hash = stored_data.get('validated_hash')
                 stored_timestamp = stored_data.get('password_change_timestamp')
-                
+
                 # Check if hash has changed since last check
                 password_change_timestamp = None
                 if stored_hash and current_hash and stored_hash != current_hash:
-                    # Hash changed! Record the current time as password change time
+                    # Hash changed — record current time as password change time
                     password_change_timestamp = datetime.datetime.now()
-                    # Update the stored hash and timestamp
                     stored_data['validated_hash'] = current_hash
                     stored_data['password_change_timestamp'] = password_change_timestamp.strftime("%Y-%m-%d %H:%M:%S")
                     config_timestamps[username] = stored_data
                     save_config_timestamps(config_timestamps)
                 elif stored_timestamp:
-                    # Hash hasn't changed, but we have a previous timestamp - use it
+                    # Hash unchanged but we have a previous timestamp — use it
                     try:
                         password_change_timestamp = datetime.datetime.strptime(stored_timestamp, "%Y-%m-%d %H:%M:%S")
                     except ValueError:
                         pass
                 elif not stored_hash and current_hash:
-                    # First time checking this user - store the current hash but no timestamp yet
+                    # First time seeing this user — store hash, no timestamp yet
                     stored_data['validated_hash'] = current_hash
                     config_timestamps[username] = stored_data
                     save_config_timestamps(config_timestamps)
-                
+
                 # If we have a timestamp, check if it's recent and validate requirements
                 if password_change_timestamp:
                     today = datetime.datetime.now()
                     time_since_change = today - password_change_timestamp
-                    
+
                     # Check if password was changed within last 7 days
                     if time_since_change.days <= 7:
-                        # Step 2: Verify password requirements and timestamp tracking
-                        # Only test if we have requirements configured
                         if requirements_to_check:
                             test_results = test_password_requirements(
                                 requirements_to_check,
@@ -2064,8 +2159,6 @@ def user_change_password(vulnerability):
                                 username_to_test=username,
                                 password_change_date=password_change_timestamp
                             )
-                            
-                            # Check if password passes based on timestamp validation
                             if test_results.get('password_passes', False):
                                 record_hit(
                                     f"{username}'s password was changed after requirements were configured.",
@@ -2074,7 +2167,7 @@ def user_change_password(vulnerability):
                             else:
                                 record_miss("Account Management")
                         else:
-                            # No password requirements configured, just check if password was changed
+                            # No password requirements configured — just check for a change
                             record_hit(
                                 f"{username}'s password was changed.",
                                 vulnerability[vuln]["Points"],
@@ -2084,7 +2177,7 @@ def user_change_password(vulnerability):
                 else:
                     # Could not determine password change time
                     record_miss("Account Management")
-                        
+
             except subprocess.CalledProcessError as e:
                 print(f"Warning: Could not get password info for {username}: {e}")
                 record_miss("Account Management")
@@ -2093,69 +2186,98 @@ def user_change_password(vulnerability):
                 record_miss("Account Management")
 
 
-# check
-def check_startup(vulnerability):
-    """
-    Checks if specific programs are set to run at startup and records hits/misses.
+# Deprecated
+# def check_startup(vulnerability):
+#     """
+#     Checks if specific programs are set to run at startup and records hits/misses.
     
-    Args:
-        vulnerability (list): A list of vulnerabilities to check.
-    """
-    file = open("startup.txt", "r", encoding="utf-16-le")
-    content = file.read().splitlines()
-    file.close()
-    for vuln in vulnerability:
-        if vuln != 1:
-            if vulnerability[vuln]["Program Name"] in content:
-                record_hit(
-                    "Program Removed from Startup", vulnerability[vuln]["Points"]
-                )
-            else:
-                record_miss("Program Management")
+#     Args:
+#         vulnerability (list): A list of vulnerabilities to check.
+#     """
+#     file = open("startup.txt", "r", encoding="utf-16-le")
+#     content = file.read().splitlines()
+#     file.close()
+#     for vuln in vulnerability:
+#         if vuln != 1:
+#             if vulnerability[vuln]["Program Name"] in content:
+#                 record_hit(
+#                     "Program Removed from Startup", vulnerability[vuln]["Points"]
+#                 )
+#             else:
+#                 record_miss("Program Management")
 
 
 def update_check_period(vulnerability):
     """
+    Checks if automatic update checks are enabled.
+    No internet connection required — both methods read local configuration only.
+
+    Ubuntu:
+        Uses `apt-config dump APT::Periodic::Update-Package-Lists` to read the
+        effective value across all /etc/apt/apt.conf.d/ files (e.g. 10periodic,
+        20auto-upgrades).  A value of "1" means daily update-list checks are on.
+
     Linux Mint:
-    gsettings get com.linuxmint.updates refresh-schedule-enabled
+        gsettings get com.linuxmint.updates refresh-schedule-enabled
+        Returns 'true' if enabled.
     """
+    enabled = False
 
-    # --- determine user to run gsettings as ---
-    user = os.environ.get("SUDO_USER")
-    if not user:
-        user = os.environ.get("USER")
-    if not user:
+    if OSTYPE == "ubuntu":
+        # Ubuntu: read effective APT periodic setting via apt-config (local only)
         try:
-            user = os.getlogin()
-        except OSError:
-            user = None
-    
-    if not user:
-        print("ERROR: Could not determine user for gsettings command")
-        record_miss("Program Management")
-        return
+            result = subprocess.run(
+                ["apt-config", "dump", "APT::Periodic::Update-Package-Lists"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            # Output example: APT::Periodic::Update-Package-Lists "1";
+            match = re.search(
+                r'APT::Periodic::Update-Package-Lists\s+"(\d+)"', result.stdout
+            )
+            if match:
+                enabled = match.group(1) == "1"
+        except Exception:
+            enabled = False
 
-    # --- run gsettings ---
-    try:
-        result = subprocess.run(
-            [
-                "sudo",
-                "-u",
-                user,
-                "gsettings",
-                "get",
-                "com.linuxmint.updates",
-                "refresh-schedule-enabled",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+    else:
+        # Linux Mint: check gsettings for the update manager refresh schedule
 
-        enabled = result.stdout.strip().lower() == "true"
+        # --- determine user to run gsettings as ---
+        user = os.environ.get("SUDO_USER")
+        if not user:
+            user = os.environ.get("USER")
+        if not user:
+            try:
+                user = os.getlogin()
+            except OSError:
+                user = None
 
-    except Exception:
-        enabled = False
+        if not user:
+            print("ERROR: Could not determine user for gsettings command")
+            record_miss("Program Management")
+            return
+
+        # --- run gsettings ---
+        try:
+            result = subprocess.run(
+                [
+                    "sudo",
+                    "-u",
+                    user,
+                    "gsettings",
+                    "get",
+                    "com.linuxmint.updates",
+                    "refresh-schedule-enabled",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            enabled = result.stdout.strip().lower() == "true"
+        except Exception:
+            enabled = False
 
     # --- scoring ---
     if enabled:
@@ -2619,7 +2741,6 @@ def check_ssh_permit_root_login():
         with open("/etc/ssh/sshd_config", "r") as ssh_config_file:
             for line in ssh_config_file:
                 stripped_line = line.strip()
-                
                 # Skip empty lines and comments
                 if not stripped_line or stripped_line.startswith("#"):
                     continue
@@ -2665,12 +2786,12 @@ def disable_SSH_Root_Login(vulnerability):
     ssh_config = check_ssh_permit_root_login()
     
     if not ssh_config['ssh_config_exists']:
-        # SSH config doesn't exist - SSH likely not installed (secure)
+        # SSH config doesn't exist - SSH likely not installed
         record_hit("SSH Root Login Disabled (SSH not configured).", vulnerability[1]["Points"])
         return
     
     if not ssh_config['permit_root_login_found']:
-        # Not found = commented out or doesn't exist = secure default
+        # Not found = commented out or doesn't exist which is default
         record_hit(
             "SSH Root Login Disabled (default or commented out).", 
             vulnerability[1]["Points"]
@@ -2729,7 +2850,6 @@ def check_kernel(vulnerability):
         
         # Step 1.5: Detect Ubuntu base version (important for derivatives like Mint)
         ubuntu_version = None
-        ubuntu_codename = None
         try:
             # Get both VERSION_ID and UBUNTU_CODENAME from /etc/os-release
             with open('/etc/os-release', 'r') as f:

@@ -116,16 +116,21 @@ def main():
     target_path = "/usr/local/bin/scoring_engine_DO_NOT_TOUCH"
     source_path = os.path.join(PROJECT_ROOT, "dist", "scoring_engine_DO_NOT_TOUCH")
 
-    # Create symbolic link to /usr/local/bin
+    # Copy binary into /usr/local/bin
+    if not os.path.isfile(source_path):
+        print(f"ERROR: Binary not found at {source_path}")
+        print("Please run build.py first to generate the binary.")
+        sys.exit(1)
+
     try:
-        # If symlink already exists, remove it to ensure it's not broken
-        if os.path.lexists(target_path): # Use lexists to check symlink itself
+        if os.path.lexists(target_path):
             os.remove(target_path)
-            
-        os.symlink(source_path, target_path) # Create fresh symlink
-        print(f"✓ Created/Updated symbolic link: {target_path}")
+
+        shutil.copy2(source_path, target_path)
+        os.chmod(target_path, 0o755)
+        print(f"✓ Copied binary to: {target_path}")
     except Exception as e:
-        print(f"ERROR: Failed to create symbolic link: {e}")
+        print(f"ERROR: Failed to copy binary: {e}")
         sys.exit(1)
 
     # Configure systemd service file
