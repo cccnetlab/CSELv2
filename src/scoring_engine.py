@@ -110,8 +110,8 @@ _ssh_config_cache_valid: bool = False
 # Path for storing password requirement configuration timestamps
 TIMESTAMP_FILE = "/etc/CYBERPATRIOT/password_config_timestamps.json"
 
-# Absolute file:// URI for the logo, resolved from assets/icons/logo.png relative to this repo
-ICONS_URI = "file://" + str(Path(__file__).resolve().parent.parent / "assets" / "icons")
+# Icons are copied to /etc/CYBERPATRIOT_DO_NOT_REMOVE by service_setup.py
+ICONS_URI = "file:///etc/CYBERPATRIOT_DO_NOT_REMOVE"
 
 
 def load_config_timestamps():
