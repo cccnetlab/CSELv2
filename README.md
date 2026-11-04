@@ -52,7 +52,7 @@ CSEL can be run with "silent misses" which simulates a CyberPatriot round where 
    * The configurator can be run after setup anytime with `sudo .venv/bin/python3.12 src/configurator.py`
 
 ### **Important Note**: 
-If you plan on using the **Check Kernel**, ***Good Program***, or ***Update Program*** vulnerabilities, please refer to the *SPECIAL SETUP* section
+If you plan on using the ***Check Kernel***, ***Good Program***, or ***Update Program*** vulnerabilities, please refer to the *SPECIAL SETUP* section
 
 ## CLI(Alternative Manual Setup)
 1. Set up your image and put your vulnerabilities in place.
@@ -70,40 +70,37 @@ If you plan on using the **Check Kernel**, ***Good Program***, or ***Update Prog
 
 ~~8. Finally, to set up the scoring machine service, run `sudo .venv/bin/python3.12 service_setup.py`. It should now create a simlink to the binary and run it as a service on startup.~~
 ### **Important Note**: 
-If you plan on using the **Check Kernel**, ***Good Program***, or ***Update Program*** vulnerabilities, please refer to the *SPECIAL SETUP* section
+If you plan on using the ***Check Kernel***, ***Good Program***, or ***Update Program*** vulnerabilities, please refer to the *SPECIAL SETUP* section
 
-**Important Note**: Your students _will_ be able to see the vulnerabilities if you leave the CSEL folder behind or if they cat the executable file that is created in /etc/CYBERPATRIOT. I tell my students where the file is and that they should stay away from it. It is practice, after all.
+**Also:** Your students _will_ be able to see the vulnerabilities if you leave the CSEL folder behind or if they cat the executable file that is created in /etc/CYBERPATRIOT. I tell my students where the file is and that they should stay away from it. It is practice, after all.
 
 ## Configurator Usage
 ### Landing Page
-![Landing Page](https://github.com/Bryannnnn1313/CSELv2/blob/master/Config%201st%20Screen.png)
+![Landing Page](<assets/screenshots/Config 1st Screen.png>)
    - Commit will launch the ScoringEngine and force close the configurator
    - Checking Silent Miss allows makes the missed points invisible in the Score Report
    - Server Mode allows you set up an FTP server so that the students can compete with each other(WIP)
    - Total Points displays the total points available to the students
    - Total Vulnerabilities shows you the count of Vulnerabilities
 ### Category Pages
-![Category Page](https://github.com/Bryannnnn1313/CSELv2/blob/master/Config%20Account%20Management.png)
+![Category Page](<assets/screenshots/Config Account Management.png>)
    - The Vulnerabilities will be labeled on the left
    - The center describes the Vulnerabilities
    - If there is a Modify tab, there vulnerability may take more than 1 flag and and may need more input
 ### Modify Page
-![Modify Page](https://github.com/Bryannnnn1313/CSELv2/blob/master/Config%20Modify.png)
+![Modify Page](<assets/screenshots/Config Modify.png>)
    - The points will be on the left
    - Center will be any additional inputs needed, A drop down is available, but manual input is possible.
    - If flag is no longer needed, then you can remove it, if you don't it will be added into the database.
 ### Report Page
-![Report Generator](https://github.com/Bryannnnn1313/CSELv2/blob/master/Report%20Generation.png)
+![Report Generator](<assets/screenshots/Report Generation.png>)
    - This page creates an html page with every flag to keep on hand.
 ### Score Report
-![Score Report](https://github.com/Bryannnnn1313/CSELv2/blob/master/ScoreReport.png)
+![Score Report](<assets/screenshots/ScoreReport.png>)
    - This page is created when the the 'Commit' is pressed.
    - If points are gained or lost then a notification will trigger
-## Known issues and planned updates
-- Removing an empty flag from the modify page may break the Configurator
-    - Temporary solution is delete the database and rerun the Configurator
 
-## Special Setup
+# Special Setup
 Due to netlabs having no internet, certain packages have to be cached first. Before you configure any programs you want students to install or update, you must cache them first:
 
 ### Good Program:
