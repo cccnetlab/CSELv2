@@ -1438,7 +1438,7 @@ def commit_config():
     # Restart scoring engine service to apply new configuration
     try:
         print("Restarting scoring_engine service to apply new configuration...")
-        # subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True)
+        subprocess.run(["systemctl", "restart", "scoring_engine"], check=True, capture_output=True)
         print("✓ Scoring engine service restarted successfully.")
     except subprocess.CalledProcessError as e:
         print(f"Warning: Could not restart scoring_engine service: {e.stderr.decode() if e.stderr else e}", file=sys.stderr)
